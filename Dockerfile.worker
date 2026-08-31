@@ -1,0 +1,38 @@
+# Dockerfile.worker
+# Python + Node.js worker for scraping and scoring pipeline
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install Node.js (needed for pfe-hunter-pipeline.mjs and mcp-server.mjs)
+RUN apt-get update && \
+    apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Node.js dependencies
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Copy Python scripts
+COPY scrape_jobspy.py ./
+COPY scrape_jobteaser.py ./
+COPY run_periodic.py ./
+
+# Copy Node.js pipeline scripts
+COPY pfe-hunter-pipeline.mjs ./
+COPY gemini-scoring.mjs ./
+COPY gemini-mcp-client.mjs ./
+COPY mcp-server.mjs ./
+COPY notifications.mjs ./
+COPY db.mjs ./
+COPY schema.sql ./
+
+# Default command (can be overridden)
+CMD ["python", "run_periodic.py", "--interval", "5"]

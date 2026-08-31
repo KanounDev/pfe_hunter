@@ -1,0 +1,61 @@
+# docker-compose.yml
+# Local development with PostgreSQL
+
+services:
+  # PostgreSQL database (local parity with Supabase)
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: pfe_hunter
+      POSTGRES_PASSWORD: pfe_hunter_local
+      POSTGRES_DB: pfe_hunter
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pfe_hunter"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Node.js API server
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgres://pfe_hunter:pfe_hunter_local@db:5432/pfe_hunter
+      API_PORT: 3001
+      FRONTEND_URL: http://localhost:5173
+      API_TOKEN: ${API_TOKEN:-local_dev_token}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+      CV_FILE_PATH: ${CV_FILE_PATH:-./uploads/cvs/cv.pdf}
+      NODE_ENV: production
+    ports:
+      - "3001:3001"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - uploads_data:/app/uploads
+
+  # Python + Node worker (scraper + scoring)
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      DATABASE_URL: postgres://pfe_hunter:pfe_hunter_local@db:5432/pfe_hunter
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
+      CV_FILE_PATH: ${CV_FILE_PATH:-./uploads/cvs/cv.pdf}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "run_periodic.py", "--interval", "5"]
+
+volumes:
+  postgres_data:
+  uploads_data:

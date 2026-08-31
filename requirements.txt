@@ -1,0 +1,18 @@
+# Python dependencies for PFE Hunter
+# Pin versions for reproducibility - scraping libs break often
+
+# Job scraping
+python-jobspy==1.1.82
+
+# Database
+psycopg2-binary==2.9.9
+
+# Environment
+python-dotenv==1.0.1
+
+# HTTP & Parsing
+requests==2.32.3
+beautifulsoup4==4.12.3
+
+# Data processing
+pandas==2.2.3

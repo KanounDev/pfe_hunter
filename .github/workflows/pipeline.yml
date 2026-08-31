@@ -1,0 +1,103 @@
+# .github/workflows/pipeline.yml
+# Runs PFE Hunter scraper + scoring pipeline on a schedule (free GitHub Actions)
+#
+# TRIGGERS:
+#   - schedule: Every 6 hours (0 */6 * * *)
+#   - workflow_dispatch: Manual trigger from Actions tab
+#
+# SECRETS REQUIRED (Settings → Secrets and variables → Actions):
+#   - DATABASE_URL: Supabase Postgres connection string (with ?sslmode=require)
+#   - GEMINI_API_KEY: Google Gemini API key
+#   - DISCORD_WEBHOOK_URL: Discord webhook for notifications (optional)
+#   - CV_CONTENT_BASE64: CV file encoded as base64 (split into chunks if >48KB)
+#   - API_TOKEN: Your API token for authentication
+
+name: PFE Hunter Pipeline
+
+on:
+  schedule:
+    # Run every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    # Allow manual trigger from GitHub Actions tab
+
+jobs:
+  scrape-and-score:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Node.js dependencies
+        run: npm ci --only=production
+
+      - name: Restore CV from secrets
+        env:
+          CV_CONTENT_BASE64: ${{ secrets.CV_CONTENT_BASE64 }}
+        run: |
+          if [ -n "$CV_CONTENT_BASE64" ]; then
+            echo "$CV_CONTENT_BASE64" | base64 -d > CV.pdf
+            echo "CV_FILE_PATH=$(pwd)/CV.pdf" >> $GITHUB_ENV
+          fi
+
+      - name: Run scraper
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          echo "============================================================"
+          echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Starting PFE Hunter run"
+          echo "============================================================"
+          echo ""
+          echo "[1/2] Running LinkedIn scraper..."
+          python scrape_jobspy.py
+
+      - name: Run scoring pipeline
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          CV_FILE_PATH: ${{ env.CV_FILE_PATH }}
+        run: |
+          echo ""
+          echo "[2/2] Running scoring pipeline..."
+          node pfe-hunter-pipeline.mjs
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f CV.pdf 2>/dev/null || true
+
+      - name: Report success
+        if: success()
+        run: |
+          echo ""
+          echo "============================================================"
+          echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Pipeline completed successfully"
+          echo "============================================================"
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo ""
+          echo "============================================================"
+          echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Pipeline FAILED"
+          echo "============================================================"
