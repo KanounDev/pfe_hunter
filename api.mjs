@@ -59,10 +59,31 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // CORS configuration
-app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+// Allow both the main domain and Cloudflare Pages preview URLs
+const allowedOrigins = [
+    'http://localhost:5173',
+    'https://pfe-hunter.pages.dev',
+];
+
+// In production, also allow any *.pages.dev preview URLs
+const corsOptions = {
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or curl)
+        if (!origin) return callback(null, true);
+
+        // Check if origin matches allowed list or is a pages.dev preview URL
+        if (allowedOrigins.includes(origin) ||
+            origin.endsWith('.pfe-hunter.pages.dev') ||
+            origin.includes('.pages.dev')) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true
-}));
+};
+
+app.use(cors(corsOptions));
 
 // Request logging
 // Keep the console readable: the dashboard polls /api/pipeline/status every
