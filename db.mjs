@@ -22,11 +22,10 @@ const __dirname = path.dirname(fileURLToPath(
 export const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     // SSL required for Supabase, Neon, and other cloud Postgres providers
-    ssl: process.env.DATABASE_URL?.includes('sslmode=require')
+    // rejectUnauthorized: false allows self-signed certificates (common in cloud providers)
+    ssl: process.env.NODE_ENV === 'production'
         ? { rejectUnauthorized: false }
-        : process.env.NODE_ENV === 'production'
-            ? { rejectUnauthorized: false }
-            : false,
+        : false,
 });
 
 // Database error handler

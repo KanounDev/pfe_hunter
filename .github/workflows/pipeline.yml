@@ -9,7 +9,9 @@
 #   - DATABASE_URL: Supabase Postgres connection string (with ?sslmode=require)
 #   - GEMINI_API_KEY: Google Gemini API key
 #   - DISCORD_WEBHOOK_URL: Discord webhook for notifications (optional)
-#   - CV_CONTENT_BASE64: CV file encoded as base64 (split into chunks if >48KB)
+#   - CV_CONTENT_BASE64_PART1: CV file encoded as base64 (part 1 of 3)
+#   - CV_CONTENT_BASE64_PART2: CV file encoded as base64 (part 2 of 3)
+#   - CV_CONTENT_BASE64_PART3: CV file encoded as base64 (part 3 of 3)
 #   - API_TOKEN: Your API token for authentication
 
 name: PFE Hunter Pipeline
@@ -52,11 +54,16 @@ jobs:
 
       - name: Restore CV from secrets
         env:
-          CV_CONTENT_BASE64: ${{ secrets.CV_CONTENT_BASE64 }}
+          CV_PART1: ${{ secrets.CV_CONTENT_BASE64_PART1 }}
+          CV_PART2: ${{ secrets.CV_CONTENT_BASE64_PART2 }}
+          CV_PART3: ${{ secrets.CV_CONTENT_BASE64_PART3 }}
         run: |
-          if [ -n "$CV_CONTENT_BASE64" ]; then
-            echo "$CV_CONTENT_BASE64" | base64 -d > CV.pdf
+          if [ -n "$CV_PART1" ]; then
+            echo "$CV_PART1$CV_PART2$CV_PART3" | base64 -d > CV.pdf
             echo "CV_FILE_PATH=$(pwd)/CV.pdf" >> $GITHUB_ENV
+            echo "CV restored successfully ($(wc -c < CV.pdf) bytes)"
+          else
+            echo "Warning: CV secrets not found, pipeline may fail"
           fi
 
       - name: Run scraper
