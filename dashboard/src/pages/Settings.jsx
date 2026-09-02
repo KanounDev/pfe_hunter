@@ -15,7 +15,7 @@ function Settings() {
   const [formData, setFormData] = useState({
     scrape_interval_minutes: 300,
     results_wanted: 10,
-    hours_old: 8,
+    hours_old: 336,
     fit_score_threshold: 70,
     search_terms: [],
     locations: [],
@@ -95,7 +95,7 @@ function Settings() {
       const parsed = {
         scrape_interval_minutes: parseInt(data.scrape_interval_minutes?.value || 300),
         results_wanted: parseInt(data.results_wanted?.value || 10),
-        hours_old: parseInt(data.hours_old?.value || 8),
+        hours_old: parseInt(data.hours_old?.value || 336),
         fit_score_threshold: parseInt(data.fit_score_threshold?.value || 70),
         search_terms: JSON.parse(data.search_terms?.value || '[]'),
         locations: JSON.parse(data.locations?.value || '[]'),
@@ -144,8 +144,8 @@ function Settings() {
       errors.push('Results wanted must be between 1 and 50')
     }
 
-    if (formData.hours_old < 1 || formData.hours_old > 168) {
-      errors.push('Hours old must be between 1 and 168')
+    if (formData.hours_old < 1 || formData.hours_old > 336) {
+      errors.push('Hours old must be between 1 and 336')
     }
 
     if (formData.fit_score_threshold < 0 || formData.fit_score_threshold > 100) {
@@ -312,12 +312,12 @@ function Settings() {
               id="hours_old"
               type="number"
               min="1"
-              max="168"
+              max="336"
               value={formData.hours_old}
               onChange={(e) => handleChange('hours_old', parseInt(e.target.value) || 1)}
               className="setting-input"
             />
-            <span className="setting-hint">Max: 168 (7 days)</span>
+            <span className="setting-hint">Max: 336 (14 days)</span>
           </div>
         </section>
 
@@ -496,7 +496,9 @@ function Settings() {
           <div className="setting-item">
             <label>
               Current CV
-              <span className="setting-description">Upload your CV for AI-powered job matching</span>
+              <span className="setting-description">
+                Upload your CV for AI-powered job matching — saved immediately, no need to click "Save Changes"
+              </span>
             </label>
 
             {cvLoading ? (

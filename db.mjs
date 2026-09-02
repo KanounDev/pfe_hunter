@@ -19,13 +19,37 @@ const { Pool } = pg;
 const __dirname = path.dirname(fileURLToPath(
     import.meta.url));
 
+const rawDatabaseUrl = process.env.DATABASE_URL || '';
+
+// pg-connection-string prints a deprecation warning whenever the connection
+// string contains sslmode=prefer|require|verify-ca (they are currently
+// aliased to verify-full). We configure SSL explicitly below, so strip those
+// params from the URL we hand to pg. Other consumers of DATABASE_URL (the
+// Python scraper, GitHub Actions) read the raw env var and are unaffected.
+let pgConnectionString = rawDatabaseUrl;
+if (rawDatabaseUrl) {
+    try {
+        const parsedUrl = new URL(rawDatabaseUrl);
+        parsedUrl.searchParams.delete('sslmode');
+        parsedUrl.searchParams.delete('uselibpqcompat');
+        pgConnectionString = parsedUrl.toString();
+    } catch {
+        // Malformed URL — hand it to pg as-is and let pg report the problem.
+        pgConnectionString = rawDatabaseUrl;
+    }
+}
+
+// Use SSL for any non-local database (Supabase, Neon, Render, ...). Do NOT key
+// this off NODE_ENV alone: some hosts don't set it, yet the database still
+// requires TLS. rejectUnauthorized: false keeps working with the self-signed
+// certificates that cloud Postgres providers commonly use.
+const isLocalDb = !rawDatabaseUrl ||
+    /sslmode=disable/i.test(rawDatabaseUrl) ||
+    /@(localhost|127\.0\.0\.1|\[::1\])[:/?]/.test(rawDatabaseUrl);
+
 export const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    // SSL required for Supabase, Neon, and other cloud Postgres providers
-    // rejectUnauthorized: false allows self-signed certificates (common in cloud providers)
-    ssl: process.env.NODE_ENV === 'production'
-        ? { rejectUnauthorized: false }
-        : false,
+    connectionString: pgConnectionString,
+    ssl: isLocalDb ? false : { rejectUnauthorized: false },
 });
 
 // Database error handler
@@ -41,6 +65,25 @@ pool.on('error', (err) => {
 export async function ensureSchema() {
     const schemaSql = await readFile(path.join(__dirname, 'schema.sql'), 'utf-8');
     await pool.query(schemaSql);
+}
+
+/**
+ * Returns the file path of the most recently uploaded active CV, or null if
+ * none exists. This is how the pipeline finds the CV uploaded through the
+ * dashboard: the file lives on the API server's disk and its path is
+ * recorded in the `cvs` table.
+ *
+ * @returns {Promise<string|null>} absolute/relative path to the CV file
+ */
+export async function getActiveCvPath() {
+    const { rows } = await pool.query(
+        `SELECT file_path
+         FROM cvs
+         WHERE is_active = true
+         ORDER BY uploaded_at DESC
+         LIMIT 1`
+    );
+    return rows.length > 0 ? rows[0].file_path : null;
 }
 
 /**

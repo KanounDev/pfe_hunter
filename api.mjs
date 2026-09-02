@@ -660,8 +660,8 @@ function validateSetting(key, value) {
 
         case 'hours_old':
             const hours = parseInt(value);
-            if (isNaN(hours) || hours < 1 || hours > 168) {
-                return 'hours_old must be between 1 and 168 (7 days)';
+            if (isNaN(hours) || hours < 1 || hours > 336) {
+                return 'hours_old must be between 1 and 336 (14 days)';
             }
             break;
 
@@ -1028,6 +1028,28 @@ async function executePipeline(runId) {
     import ('node:child_process');
 
     try {
+        // Resolve the CV BEFORE scraping — no point scraping job postings if
+        // we have no CV to score them against. The dashboard uploads CVs to
+        // disk and records the path in the `cvs` table; pass that path to the
+        // pipeline child process via CV_FILE_PATH (the child has no other way
+        // of discovering it).
+        const { rows: cvRows } = await pool.query(
+            `SELECT file_path
+             FROM cvs
+             WHERE is_active = true
+             ORDER BY uploaded_at DESC
+             LIMIT 1`
+        );
+
+        if (cvRows.length === 0) {
+            throw new Error('No CV uploaded yet. Upload a CV on the Settings page, then run the pipeline again.');
+        }
+
+        const cvFilePath = path.resolve(cvRows[0].file_path);
+        if (!existsSync(cvFilePath)) {
+            throw new Error(`CV file missing on disk: ${cvFilePath}. The service filesystem is ephemeral on Render — re-upload your CV after every deploy/restart.`);
+        }
+
         // Update step: scraping
         await updatePipelineRun(runId, 'running', 'scraper');
 
@@ -1066,7 +1088,8 @@ async function executePipeline(runId) {
         // Run Node.js pipeline for scoring
         const pipelineProcess = spawn('node', ['pfe-hunter-pipeline.mjs'], {
             cwd: __dirname,
-            stdio: 'pipe'
+            stdio: 'pipe',
+            env: { ...process.env, CV_FILE_PATH: cvFilePath }
         });
 
         let pipelineOutput = '';

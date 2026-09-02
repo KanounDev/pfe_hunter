@@ -24,7 +24,8 @@
 // Intended to run on the 6-hourly schedule (cron / GitHub Action).
 
 import 'dotenv/config';
-import { ensureSchema, getUnscoredPostings, saveScores, closePool, getSetting } from './db.mjs';
+import { existsSync } from 'node:fs';
+import { ensureSchema, getUnscoredPostings, saveScores, closePool, getSetting, getActiveCvPath } from './db.mjs';
 import { scorePostingsBatch, initialize as initScoring, cleanup as cleanupScoring } from './gemini-scoring.mjs';
 import { notifyViaMcp } from './gemini-mcp-client.mjs';
 import { sendPipelineFailureAlert } from './notifications.mjs';
@@ -104,7 +105,23 @@ async function main() {
         await ensureSchema();
 
         step = 'cv-upload';
-        await initScoring(process.env.CV_FILE_PATH);
+        // CV resolution order: CV_FILE_PATH env var (set by api.mjs when it
+        // spawns this pipeline, or in CI) → the CV uploaded via the dashboard
+        // (its path is stored in the `cvs` table).
+        let cvPath = process.env.CV_FILE_PATH;
+        if (!cvPath) {
+            cvPath = await getActiveCvPath();
+            if (cvPath) {
+                console.log(`CV_FILE_PATH not set — using CV uploaded via dashboard: ${cvPath}`);
+            }
+        }
+        if (!cvPath) {
+            throw new Error('No CV available. Set CV_FILE_PATH in the environment or upload a CV via the dashboard Settings page.');
+        }
+        if (!existsSync(cvPath)) {
+            throw new Error(`CV file not found on disk at "${cvPath}". If the service was redeployed, the uploaded file was wiped (ephemeral filesystem) — re-upload the CV in the dashboard Settings page.`);
+        }
+        await initScoring(cvPath);
 
         step = 'load';
         const postings = await loadUnscoredPostings();
