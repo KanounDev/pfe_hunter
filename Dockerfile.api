@@ -1,19 +1,35 @@
 # Dockerfile.api
-# Node.js API server for PFE Hunter
+# Node.js API server for PFE Hunter with Python support
 
-FROM node:20-alpine
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
+# Install Node.js
+RUN apt-get update && \
+    apt-get install -y curl && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Node.js dependencies
 COPY package*.json ./
 RUN npm ci --only=production
 
-# Copy source files
+# Copy all source files
 COPY api.mjs ./
 COPY db.mjs ./
 COPY schema.sql ./
 COPY notifications.mjs ./
+COPY scrape_jobspy.py ./
+COPY pfe-hunter-pipeline.mjs ./
+COPY gemini-scoring.mjs ./
+COPY gemini-mcp-client.mjs ./
+COPY mcp-server.mjs ./
 
 # Create uploads directory
 RUN mkdir -p uploads/cvs
