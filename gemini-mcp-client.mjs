@@ -26,7 +26,7 @@ import path from 'node:path';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
 const DEFAULT_FIT_SCORE_THRESHOLD = 70;
 const MAX_RETRIES = 3;
 const RETRY_BACKOFF_MS = 1000; // 1s, then 2s, then 4s
