@@ -69,6 +69,7 @@ jobs:
       - name: Run scraper
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NODE_ENV: production
         run: |
           echo "============================================================"
           echo "[$(date -u '+%Y-%m-%d %H:%M:%S UTC')] Starting PFE Hunter run"
@@ -83,6 +84,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           CV_FILE_PATH: ${{ env.CV_FILE_PATH }}
+          NODE_ENV: production
         run: |
           echo ""
           echo "[2/2] Running scoring pipeline..."
