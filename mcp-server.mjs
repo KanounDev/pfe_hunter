@@ -44,10 +44,14 @@ server.registerTool(
                     job_id: z.string(),
                     title: z.string(),
                     company: z.string(),
-                    location: z.string().optional(),
+                    // Gemini emits "location": null (not absent) for postings
+                    // without a location — .optional() alone rejects null and
+                    // kills the WHOLE digest over one missing field.
+                    location: z.string().nullish(),
                     job_url: z.string(),
-                    fit_score: z.number(),
-                    fit_reasoning: z.string().optional(),
+                    // Tolerate fit_score arriving as "85" instead of 85.
+                    fit_score: z.coerce.number(),
+                    fit_reasoning: z.string().nullish(),
                 })
             ),
         },
@@ -74,7 +78,7 @@ server.registerTool(
                 content: [
                     {
                         type: 'text',
-                        text: `Nothing sent — ${belowThreshold} posting(s) below the fit_score threshold, ${alreadyNotified} already notified previously.`,
+                        text: `Nothing sent — ${belowThreshold} posting(s) below the fit_score threshold, ${alreadyNotified} already notified or not found in the database.`,
                     },
                 ],
             };
@@ -82,12 +86,38 @@ server.registerTool(
 
         const result = await sendDigestAlert(toSend);
 
-        // Only stamp notified_at once a real send was attempted — a dry
-        // run (no webhook configured) never actually told anyone anything,
-        // so it shouldn't block a real alert once credentials are added.
-        if (!result.dryRun) {
-            await markNotified(toSend.map((p) => p.job_id));
+        // A dry run never told anyone anything — report it clearly.
+        if (result.dryRun) {
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: `DRY RUN — no notification channel configured (set DISCORD_WEBHOOK_URL). Payload would have been:\n${result.text}`,
+                    },
+                ],
+            };
         }
+
+        // Only stamp notified_at once a channel ACTUALLY delivered — a failed
+        // send must never be reported (or recorded) as success, otherwise the
+        // postings would be skipped forever and never re-alerted.
+        if (!result.ok) {
+            const errors = result.results
+                .filter((r) => !r.ok)
+                .map((r) => `${r.channel}: ${r.error}`)
+                .join(' | ');
+            return {
+                isError: true,
+                content: [
+                    {
+                        type: 'text',
+                        text: `FAILED to send digest — every configured channel failed. ${errors}`,
+                    },
+                ],
+            };
+        }
+
+        await markNotified(toSend.map((p) => p.job_id));
 
         const skippedNote =
             belowThreshold || alreadyNotified
@@ -98,9 +128,7 @@ server.registerTool(
             content: [
                 {
                     type: 'text',
-                    text: result.dryRun
-                        ? `Dry run — no DISCORD_WEBHOOK_URL set. Payload would have been:\n${result.text}`
-                        : `Sent to Discord successfully. ${toSend.length} posting(s) included.${skippedNote}`,
+                    text: `Sent to Discord successfully. ${toSend.length} posting(s) included.${skippedNote}`,
                 },
             ],
         };

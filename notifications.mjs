@@ -21,8 +21,9 @@ import 'dotenv/config';
 export function formatDigest(postings) {
     const lines = postings.map((p) => {
         const score = p.fit_score != null ? `${p.fit_score}/100` : 'unscored';
+        const place = p.location ? ` — ${p.location}` : '';
         const reasoning = p.fit_reasoning ? `\n  Why: ${p.fit_reasoning}` : '';
-        return `• [${score}] ${p.title} @ ${p.company} — ${p.location}\n  ${p.job_url}${reasoning}`;
+        return `• [${score}] ${p.title} @ ${p.company}${place}\n  ${p.job_url}${reasoning}`;
     });
 
     return `PFE Hunter — ${postings.length} new match(es)\n\n${lines.join('\n\n')}`;
@@ -33,15 +34,25 @@ async function sendTelegramMessage(text) {
     const chatId = process.env.TELEGRAM_CHAT_ID;
     if (!token || !chatId) return null;
 
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
-    });
-
-    if (!res.ok) {
-        throw new Error(`Telegram send failed: ${res.status} ${await res.text()}`);
+    // Telegram caps a single message at 4096 chars — chunk long digests the
+    // same way the Discord sender does, instead of truncating the tail.
+    const chunks = [];
+    for (let i = 0; i < text.length; i += 4000) {
+        chunks.push(text.slice(i, i + 4000));
     }
+
+    for (const [index, chunk] of chunks.entries()) {
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: chunk, disable_web_page_preview: true }),
+        });
+
+        if (!res.ok) {
+            throw new Error(`Telegram send failed (part ${index + 1}/${chunks.length}): ${res.status} ${await res.text()}`);
+        }
+    }
+
     return { channel: 'telegram', ok: true };
 }
 
@@ -49,16 +60,26 @@ async function sendDiscordMessage(text) {
     const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
     if (!webhookUrl) return null;
 
-    const res = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Discord messages cap at 2000 chars; truncate defensively.
-        body: JSON.stringify({ content: text.slice(0, 1990) }),
-    });
-
-    if (!res.ok) {
-        throw new Error(`Discord send failed: ${res.status} ${await res.text()}`);
+    // Discord caps a single message at 2000 chars — split long digests into
+    // sequential chunks instead of silently truncating the tail (a 12-posting
+    // digest with reasoning lines easily exceeds the limit).
+    const chunks = [];
+    for (let i = 0; i < text.length; i += 1990) {
+        chunks.push(text.slice(i, i + 1990));
     }
+
+    for (const [index, chunk] of chunks.entries()) {
+        const res = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: chunk }),
+        });
+
+        if (!res.ok) {
+            throw new Error(`Discord send failed (part ${index + 1}/${chunks.length}): ${res.status} ${await res.text()}`);
+        }
+    }
+
     return { channel: 'discord', ok: true };
 }
 
@@ -72,18 +93,20 @@ async function sendDiscordMessage(text) {
  */
 export async function sendDigestAlert(postings) {
     const text = formatDigest(postings);
-    const attempts = await Promise.all([
+    const attempts = (await Promise.all([
         sendTelegramMessage(text).catch((err) => ({ channel: 'telegram', ok: false, error: err.message })),
         sendDiscordMessage(text).catch((err) => ({ channel: 'discord', ok: false, error: err.message })),
-    ]);
+    ])).filter(Boolean);
 
-    const results = attempts.filter(Boolean);
-
-    if (results.length === 0) {
-        return { dryRun: true, text, results: [] };
+    if (attempts.length === 0) {
+        return { dryRun: true, ok: false, text, results: [] };
     }
 
-    return { dryRun: false, text, results };
+    // ok is true only if EVERY configured channel actually delivered. A
+    // failed channel must surface as a failure — the old version swallowed
+    // send errors and let the caller report success.
+    const ok = attempts.every((a) => a.ok === true);
+    return { dryRun: false, ok, text, results: attempts };
 }
 
 /**

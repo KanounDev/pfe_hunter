@@ -164,7 +164,17 @@ export async function notifyViaMcp(scoredPostings, fitScoreThreshold = DEFAULT_F
         //    the actual network hop from "Gemini wants to do this" to
         //    "the server actually did it".
         const result = await mcpClient.callTool({ name, arguments: args });
-        console.log('MCP server response:', result.content?.[0]?.text);
+
+        // Log the FULL result — the old version printed only
+        // content[0].text and never checked isError, so tool failures
+        // (validation errors, Discord send failures) looked like success.
+        console.log('MCP tool result:', JSON.stringify(result, null, 2));
+
+        if (result.isError) {
+            const errorText =
+                result.content?.map((c) => c.text ?? '').join('\n') || JSON.stringify(result);
+            throw new Error(`MCP tool "${name}" failed: ${errorText}`);
+        }
     } finally {
         await mcpClient.close();
     }
