@@ -43,19 +43,56 @@ function sleep(ms) {
  * reject the whole request over. This strips anything Gemini can't
  * handle, recursively (in case a nested object/array has the same
  * fields).
+ *
+ * It ALSO collapses the two shapes zod uses for nullable fields —
+ *   anyOf: [ { type: 'string' }, { type: 'null' } ]
+ *   type:  ['string', 'null']
+ * — into Gemini's native representation, `nullable: true`. Both shapes
+ * crash the Gemini request with 400 "Proto field is not repeating,
+ * cannot start list" when they appear inside function declarations.
  */
-function sanitizeSchemaForGemini(schema) {
+export function sanitizeSchemaForGemini(schema) {
     if (Array.isArray(schema)) {
         return schema.map(sanitizeSchemaForGemini);
     }
-    if (schema && typeof schema === 'object') {
-        const { $schema, additionalProperties, ...rest } = schema;
-        for (const key of Object.keys(rest)) {
-            rest[key] = sanitizeSchemaForGemini(rest[key]);
-        }
-        return rest;
+    if (!schema || typeof schema !== 'object') {
+        return schema;
     }
-    return schema;
+
+    let working = schema;
+
+    if (Array.isArray(working.anyOf)) {
+        const branches = working.anyOf.map(sanitizeSchemaForGemini);
+        const nullBranches = branches.filter((b) => b && b.type === 'null');
+        const realBranches = branches.filter((b) => !(b && b.type === 'null'));
+
+        // Merge the first real branch into this schema; if a null branch
+        // exists, express it with Gemini's own `nullable: true`.
+        const merged = { ...working, ...(realBranches[0] ?? {}) };
+        delete merged.anyOf;
+        if (nullBranches.length > 0) {
+            merged.nullable = true;
+        } else {
+            delete merged.nullable;
+        }
+        working = merged;
+    }
+
+    if (Array.isArray(working.type)) {
+        const isNullable = working.type.includes('null');
+        const realTypes = working.type.filter((t) => t !== 'null');
+        working = {
+            ...working,
+            type: realTypes[0] ?? 'string',
+            ...(isNullable ? { nullable: true } : {}),
+        };
+    }
+
+    const { $schema, additionalProperties, ...rest } = working;
+    for (const key of Object.keys(rest)) {
+        rest[key] = sanitizeSchemaForGemini(rest[key]);
+    }
+    return rest;
 }
 
 /**
@@ -65,7 +102,7 @@ function sanitizeSchemaForGemini(schema) {
  * this is the piece that wouldn't exist if Gemini had built-in MCP
  * support.
  */
-function mcpToolToGeminiDeclaration(mcpTool) {
+export function mcpToolToGeminiDeclaration(mcpTool) {
     return {
         name: mcpTool.name,
         description: mcpTool.description,
