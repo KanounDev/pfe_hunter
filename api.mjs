@@ -376,39 +376,31 @@ app.get('/api/distribution', async(req, res) => {
     }
 });
 
-// Get recent run history
+// Get recent run history (reads from database, not local file)
 app.get('/api/runs', async(req, res) => {
     try {
         const { limit } = req.query;
         const limitVal = limit ? Math.min(parseInt(limit), 50) : 10;
 
-        // Read from periodic_run_log.json
-        const { readFile } = await
-        import ('node:fs/promises');
-        const { existsSync } = await
-        import ('node:fs');
-        const path = await
-        import ('node:path');
+        const { rows } = await pool.query(
+            `SELECT id, status, step, postings_found, postings_inserted, postings_scored,
+                    error_message, started_at, finished_at, elapsed_seconds
+             FROM pipeline_runs
+             ORDER BY started_at DESC
+             LIMIT $1`, [limitVal]
+        );
 
-        const logFile = path.join(process.cwd(), 'periodic_run_log.json');
-
-        if (!existsSync(logFile)) {
-            return res.json([]);
-        }
-
-        const content = await readFile(logFile, 'utf-8');
-
-        // Safe JSON parsing with error handling
-        let runs;
-        try {
-            runs = JSON.parse(content);
-        } catch (parseError) {
-            console.error('Failed to parse run log:', parseError);
-            return res.json([]); // Return empty array on error
-        }
-
-        // Return most recent runs
-        res.json(runs.slice(-limitVal).reverse());
+        // Transform to match the format expected by ActivityTimeline component
+        res.json(rows.map(row => ({
+            id: row.id,
+            status: row.status,
+            step: row.step,
+            inserted: row.postings_inserted || 0,
+            scored: row.postings_scored || 0,
+            timestamp: row.started_at,
+            elapsed_seconds: row.elapsed_seconds,
+            error_message: row.error_message
+        })));
     } catch (err) {
         console.error('Error fetching runs:', err);
         res.status(500).json({ error: 'Failed to fetch runs' });
