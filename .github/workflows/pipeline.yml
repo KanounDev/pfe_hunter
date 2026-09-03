@@ -18,8 +18,8 @@ name: PFE Hunter Pipeline
 
 on:
   schedule:
-    # Run every 30 minutes
-    - cron: '*/30 * * * *'
+    # Run every 300 minutes
+    - cron: '*/300 * * * *'
   workflow_dispatch:
     # Allow manual trigger from GitHub Actions tab
 

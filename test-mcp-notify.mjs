@@ -44,7 +44,21 @@ const webhookMode = process.argv[3] || 'real';
 const toolArgs =
     mode === 'null-location'
         ? { postings: TEST_POSTINGS.map((p, i) => (i === 1 ? { ...p, location: null } : p)) }
-        : { postings: TEST_POSTINGS };
+        : mode === 'big'
+            ? {
+                  // 12 realistic postings with nulls + long reasoning (~2500
+                  // chars) → forces 2 Discord chunks, mirrors a real run.
+                  postings: Array.from({ length: 12 }, (_, i) => ({
+                      job_id: `mcp-diag-${i + 1}`,
+                      title: `Software Engineer Fullstack - Stage de fin d'études #${i + 1}`,
+                      company: `Corp ${i + 1}`,
+                      location: i % 3 === 0 ? null : ['Paris', 'Lyon', 'Grenoble'][i % 3],
+                      job_url: `https://example.com/job/${i + 1}`,
+                      fit_score: 95 - i,
+                      fit_reasoning: `Strong match combining the candidate's full-stack engineering and artificial intelligence background in an R&D internship setting — long reasoning sentence #${i + 1} to approximate real Gemini output length for chunking tests.`,
+                  })),
+              }
+            : { postings: TEST_POSTINGS };
 console.log(`mode: ${mode}, webhook: ${webhookMode}`);
 
 // localhost resolves to both IPv4/IPv6 on this machine and one of the
@@ -53,7 +67,7 @@ const dbUrl = (process.env.DATABASE_URL || '').replace('localhost', '127.0.0.1')
 const pool = new pg.Pool({ connectionString: dbUrl, ssl: false });
 
 async function seed() {
-    for (const p of TEST_POSTINGS) {
+    for (const p of toolArgs.postings) {
         await pool.query(
             `INSERT INTO job_postings (job_id, job_url, title, company, location, description, fit_score, fit_reasoning, notified_at)
              VALUES ($1, $2, $3, $4, $5, 'diagnostic test row', $6, $7, NULL)
@@ -66,13 +80,13 @@ async function seed() {
 async function checkNotified() {
     const { rows } = await pool.query(
         `SELECT job_id, notified_at FROM job_postings WHERE job_id = ANY($1)`,
-        [TEST_POSTINGS.map((p) => p.job_id)]
+        [toolArgs.postings.map((p) => p.job_id)]
     );
     return rows.map((r) => `${r.job_id}: notified_at=${r.notified_at?.toISOString() ?? 'NULL'}`).join(' | ');
 }
 
 async function cleanup() {
-    await pool.query(`DELETE FROM job_postings WHERE job_id = ANY($1)`, [TEST_POSTINGS.map((p) => p.job_id)]);
+    await pool.query(`DELETE FROM job_postings WHERE job_id = ANY($1)`, [toolArgs.postings.map((p) => p.job_id)]);
 }
 
 let dbReady = false;
@@ -85,7 +99,7 @@ try {
 console.log('DISCORD_WEBHOOK_URL in this process:', process.env.DISCORD_WEBHOOK_URL ? `(set, ends ...${process.env.DISCORD_WEBHOOK_URL.slice(-12)})` : '(NOT SET)');
 
 const childEnv = { ...process.env, DATABASE_URL: dbUrl };
-if (webhookMode === 'unset') delete childEnv.DISCORD_WEBHOOK_URL;
+if (webhookMode === 'unset') childEnv.DISCORD_WEBHOOK_URL = '';
 if (webhookMode === 'broken') childEnv.DISCORD_WEBHOOK_URL = 'http://127.0.0.1:9/hook';
 
 const transport = new StdioClientTransport({
