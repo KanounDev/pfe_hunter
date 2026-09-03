@@ -161,9 +161,12 @@ export async function notifyViaMcp(scoredPostings, fitScoreThreshold = DEFAULT_F
     }
 
     // 1. Launch the real MCP server as a subprocess and connect to it.
+    // CRITICAL: Must pass env vars (DATABASE_URL, DISCORD_WEBHOOK_URL, etc.)
+    // to the subprocess, otherwise mcp-server.mjs can't connect to the database.
     const transport = new StdioClientTransport({
         command: 'node',
         args: [path.join(__dirname, 'mcp-server.mjs')],
+        env: process.env,
     });
     const mcpClient = new Client({ name: 'pfe-hunter-gemini-client', version: '1.0.0' });
     await mcpClient.connect(transport);
