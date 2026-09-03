@@ -49,7 +49,10 @@ async function sendTelegramMessage(text) {
         });
 
         if (!res.ok) {
-            throw new Error(`Telegram send failed (part ${index + 1}/${chunks.length}): ${res.status} ${await res.text()}`);
+            // Read the body defensively — a failed body read must never
+            // replace our informative error with an empty-message one.
+            const body = await res.text().catch(() => '');
+            throw new Error(`Telegram send failed (part ${index + 1}/${chunks.length}): status=${res.status} body=${body || '(empty)'}`);
         }
     }
 
@@ -76,7 +79,8 @@ async function sendDiscordMessage(text) {
         });
 
         if (!res.ok) {
-            throw new Error(`Discord send failed (part ${index + 1}/${chunks.length}): ${res.status} ${await res.text()}`);
+            const body = await res.text().catch(() => '');
+            throw new Error(`Discord send failed (part ${index + 1}/${chunks.length}): status=${res.status} body=${body || '(empty)'}`);
         }
     }
 
@@ -93,9 +97,13 @@ async function sendDiscordMessage(text) {
  */
 export async function sendDigestAlert(postings) {
     const text = formatDigest(postings);
+    // err?.message can theoretically be empty (see mcp-server.mjs's empty
+    // {"text":""} incident) — fall back through code → String() so the
+    // reported error is never blank.
+    const describe = (err) => err?.message || err?.code || String(err) || 'unknown send error';
     const attempts = (await Promise.all([
-        sendTelegramMessage(text).catch((err) => ({ channel: 'telegram', ok: false, error: err.message })),
-        sendDiscordMessage(text).catch((err) => ({ channel: 'discord', ok: false, error: err.message })),
+        sendTelegramMessage(text).catch((err) => ({ channel: 'telegram', ok: false, error: describe(err) })),
+        sendDiscordMessage(text).catch((err) => ({ channel: 'discord', ok: false, error: describe(err) })),
     ])).filter(Boolean);
 
     if (attempts.length === 0) {

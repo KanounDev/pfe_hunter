@@ -57,81 +57,117 @@ server.registerTool(
         },
     },
     async ({ postings }) => {
-        // Defense-in-depth #1: re-check the fit_score threshold in code
-        // rather than relying solely on the prompt instruction Gemini was
-        // given.
-        const qualifying = postings.filter(
-            (p) => typeof p.fit_score === 'number' && p.fit_score >= FIT_SCORE_THRESHOLD
-        );
-        const belowThreshold = postings.length - qualifying.length;
+        try {
+            // Diagnostics go to stderr: StdioClientTransport forwards the
+            // subprocess' stderr to the pipeline's stderr, which api.mjs logs
+            // — so these lines show up in Render's logs.
+            console.error(`[send_digest_alert] called with ${postings.length} posting(s)`);
 
-        // Defense-in-depth #2: never alert twice on the same posting. If
-        // this call is happening because a run got retried after a partial
-        // failure, some of these may have already been alerted on
-        // successfully in an earlier attempt.
-        const stillUnnotified = new Set(await filterUnnotified(qualifying.map((p) => p.job_id)));
-        const toSend = qualifying.filter((p) => stillUnnotified.has(p.job_id));
-        const alreadyNotified = qualifying.length - toSend.length;
+            // Defense-in-depth #1: re-check the fit_score threshold in code
+            // rather than relying solely on the prompt instruction Gemini was
+            // given.
+            const qualifying = postings.filter(
+                (p) => typeof p.fit_score === 'number' && p.fit_score >= FIT_SCORE_THRESHOLD
+            );
+            const belowThreshold = postings.length - qualifying.length;
+            console.error(`[send_digest_alert] qualifying=${qualifying.length}, belowThreshold=${belowThreshold}`);
 
-        if (toSend.length === 0) {
+            // Defense-in-depth #2: never alert twice on the same posting. If
+            // this call is happening because a run got retried after a partial
+            // failure, some of these may have already been alerted on
+            // successfully in an earlier attempt.
+            const stillUnnotified = new Set(await filterUnnotified(qualifying.map((p) => p.job_id)));
+            const toSend = qualifying.filter((p) => stillUnnotified.has(p.job_id));
+            const alreadyNotified = qualifying.length - toSend.length;
+            console.error(`[send_digest_alert] toSend=${toSend.length}, alreadyNotified=${alreadyNotified}`);
+
+            if (toSend.length === 0) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `Nothing sent — ${belowThreshold} posting(s) below the fit_score threshold, ${alreadyNotified} already notified or not found in the database.`,
+                        },
+                    ],
+                };
+            }
+
+            const result = await sendDigestAlert(toSend);
+            console.error(
+                `[send_digest_alert] sendDigestAlert → ${JSON.stringify({
+                    dryRun: result.dryRun,
+                    ok: result.ok,
+                    results: result.results,
+                })}`
+            );
+
+            // A dry run never told anyone anything — report it clearly.
+            if (result.dryRun) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: `DRY RUN — no notification channel configured (set DISCORD_WEBHOOK_URL). Payload would have been:\n${result.text}`,
+                        },
+                    ],
+                };
+            }
+
+            // Only stamp notified_at once a channel ACTUALLY delivered — a failed
+            // send must never be reported (or recorded) as success, otherwise the
+            // postings would be skipped forever and never re-alerted.
+            if (!result.ok) {
+                const failures = Array.isArray(result.results) ? result.results.filter((r) => !r.ok) : [];
+                const errors = failures.map((r) => `${r.channel}: ${r.error || 'unknown error'}`).join(' | ');
+                return {
+                    isError: true,
+                    content: [
+                        {
+                            type: 'text',
+                            text: `FAILED to send digest — no channel delivered. ${errors || JSON.stringify(result.results ?? [])}`,
+                        },
+                    ],
+                };
+            }
+
+            await markNotified(toSend.map((p) => p.job_id));
+
+            const skippedNote =
+                belowThreshold || alreadyNotified
+                    ? ` (skipped ${belowThreshold} below threshold, ${alreadyNotified} already notified)`
+                    : '';
+
             return {
                 content: [
                     {
                         type: 'text',
-                        text: `Nothing sent — ${belowThreshold} posting(s) below the fit_score threshold, ${alreadyNotified} already notified or not found in the database.`,
+                        text: `Sent to Discord successfully. ${toSend.length} posting(s) included.${skippedNote}`,
                     },
                 ],
             };
-        }
-
-        const result = await sendDigestAlert(toSend);
-
-        // A dry run never told anyone anything — report it clearly.
-        if (result.dryRun) {
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: `DRY RUN — no notification channel configured (set DISCORD_WEBHOOK_URL). Payload would have been:\n${result.text}`,
-                    },
-                ],
-            };
-        }
-
-        // Only stamp notified_at once a channel ACTUALLY delivered — a failed
-        // send must never be reported (or recorded) as success, otherwise the
-        // postings would be skipped forever and never re-alerted.
-        if (!result.ok) {
-            const errors = result.results
-                .filter((r) => !r.ok)
-                .map((r) => `${r.channel}: ${r.error}`)
-                .join(' | ');
+        } catch (err) {
+            // The MCP SDK wraps handler exceptions as
+            // createToolError(error.message) — an Error with an EMPTY message
+            // becomes the silent {"text":""} error result seen in run 12.
+            // Guarantee that never happens again: log the full stack to
+            // stderr and return the most informative non-empty detail we can
+            // (pg errors, for example, sometimes carry only a `.code`).
+            const detail =
+                err?.stack ||
+                `${err?.message || ''}${err?.code ? ` (code ${err.code})` : ''}`.trim() ||
+                String(err) ||
+                'unknown error';
+            console.error(`[send_digest_alert] EXCEPTION: ${detail}`);
             return {
                 isError: true,
                 content: [
                     {
                         type: 'text',
-                        text: `FAILED to send digest — every configured channel failed. ${errors}`,
+                        text: `send_digest_alert failed: ${detail}`,
                     },
                 ],
             };
         }
-
-        await markNotified(toSend.map((p) => p.job_id));
-
-        const skippedNote =
-            belowThreshold || alreadyNotified
-                ? ` (skipped ${belowThreshold} below threshold, ${alreadyNotified} already notified)`
-                : '';
-
-        return {
-            content: [
-                {
-                    type: 'text',
-                    text: `Sent to Discord successfully. ${toSend.length} posting(s) included.${skippedNote}`,
-                },
-            ],
-        };
     }
 );
 
