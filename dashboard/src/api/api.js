@@ -3,6 +3,24 @@
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
+// Maps HTTP status codes to actionable, human-friendly guidance.
+function describeHttpError(status, serverMessage) {
+  switch (status) {
+    case 401:
+      return 'Unauthorized — the API token is missing or invalid. Check that VITE_API_TOKEN in dashboard/.env matches API_TOKEN in the backend .env, then restart the dev server.';
+    case 403:
+      return 'Forbidden — your token is valid but this action is not allowed.';
+    case 404:
+      return serverMessage || 'Not found.';
+    case 429:
+      return 'Rate limit exceeded — too many requests. Wait a few minutes and try again.';
+    case 503:
+      return serverMessage || 'Service temporarily unavailable.';
+    default:
+      return serverMessage || `HTTP ${status}`;
+  }
+}
+
 // Helper for fetch with error handling
 async function apiFetch(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
@@ -18,8 +36,8 @@ async function apiFetch(endpoint, options = {}) {
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(error.error || `HTTP ${response.status}`);
+      const error = await response.json().catch(() => ({}));
+      throw new Error(describeHttpError(response.status, error.error));
     }
 
     return response.json();
@@ -136,8 +154,8 @@ export async function uploadCV(file) {
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+    const error = await response.json().catch(() => ({}));
+    throw new Error(describeHttpError(response.status, error.error));
   }
 
   return response.json();
@@ -150,10 +168,14 @@ export async function deleteCV() {
 }
 
 export async function downloadCV() {
-  const response = await fetch(`${API_BASE}/cv/download`);
+  const response = await fetch(`${API_BASE}/cv/download`, {
+    headers: {
+      ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+    },
+  });
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+    const error = await response.json().catch(() => ({}));
+    throw new Error(describeHttpError(response.status, error.error));
   }
   return response.blob();
 }

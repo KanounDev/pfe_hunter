@@ -102,6 +102,7 @@ function RunNowButton() {
         onClick={handleRunNow}
         disabled={loading || isRunning}
       >
+        {loading && <span className="btn-spinner" aria-hidden="true" />}
         {loading ? 'Starting...' : isRunning ? 'Running...' : '▶️ Run Now'}
       </button>
 

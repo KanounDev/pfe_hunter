@@ -3,18 +3,24 @@
 // Backend API for PFE Hunter Dashboard.
 // Express server that connects to Postgres and serves data to the React frontend.
 //
+// SECURITY: every endpoint except GET /api/health requires the API_TOKEN —
+// sent as "Authorization: Bearer <token>" or "?token=<token>". General
+// endpoints are rate limited to 100 req/15min/IP; POST /api/pipeline/trigger
+// to 10 req/15min/IP.
+//
 // ENDPOINTS:
-//   GET /api/postings     - List all postings (with filters)
-//   GET /api/postings/:id - Get single posting
-//   GET /api/stats        - Get aggregated statistics
-//   GET /api/runs         - Get recent run history
-//   GET /api/health       - Health check
-//   POST /api/cv/upload   - Upload CV file
-//   GET /api/cv           - Get current CV info
-//   DELETE /api/cv        - Delete CV
+//   GET  /api/health         - Health check (public, no token)
+//   GET  /api/postings       - List all postings (with filters)
+//   GET  /api/postings/:id   - Get single posting
+//   GET  /api/stats          - Get aggregated statistics
+//   GET  /api/runs           - Get recent run history
+//   POST /api/cv/upload      - Upload CV file (→ Supabase Storage)
+//   GET  /api/cv             - Get current CV info
+//   GET  /api/cv/download    - Download current CV
+//   DELETE /api/cv           - Delete CV
 //
 // SETUP:
-//   npm install express cors pg dotenv multer
+//   npm install express cors pg dotenv multer @supabase/supabase-js
 //   node api.mjs
 
 import 'dotenv/config';
@@ -24,8 +30,18 @@ import multer from 'multer';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import morgan from 'morgan';
+import crypto from 'node:crypto';
+import { z } from 'zod';
+import Filter from 'xss';
 import { pool, ensureSchema } from './db.mjs';
-import { writeFile, readFile, unlink, mkdir } from 'node:fs/promises';
+import {
+    isSupabaseConfigured,
+    ensureCvBucket,
+    uploadCvToStorage,
+    deleteCvFile,
+    downloadCvFromStorage,
+} from './supabase-storage.mjs';
+import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +51,6 @@ const PORT = process.env.API_PORT || 3001;
 const API_TOKEN = process.env.API_TOKEN;
 const __dirname = path.dirname(fileURLToPath(
     import.meta.url));
-const CV_UPLOAD_DIR = path.join(__dirname, 'uploads', 'cvs');
 
 // Track pipeline run status in memory
 let currentPipelineRun = null;
@@ -43,15 +58,29 @@ let currentPipelineRun = null;
 // Security middleware
 app.use(helmet());
 
-// Rate limiting
-const limiter = rateLimit({
+// ---------- RATE LIMITING ----------
+// General limiter: 100 requests / 15 min / IP for the whole API.
+// /api/health is excluded so uptime monitors never trip the limit.
+const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 100, // limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.',
+    message: { error: 'Too many requests from this IP, please try again later.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.path === '/api/health',
+});
+app.use(generalLimiter);
+
+// Strict limiter for the manual pipeline trigger: 10 requests / 15 min / IP.
+// Spawning the scraper + Gemini scoring is expensive — this endpoint is the
+// obvious abuse target.
+const pipelineLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: 'Too many pipeline run requests. You can trigger at most 10 runs per 15 minutes.' },
     standardHeaders: true,
     legacyHeaders: false,
 });
-app.use(limiter);
 
 // Trust proxy for rate limiting behind PaaS (Render, Cloudflare, etc.)
 if (process.env.NODE_ENV === 'production') {
@@ -102,69 +131,189 @@ if (accessLogMode !== 'off') {
 
 app.use(express.json());
 
-// Authentication middleware
-function authMiddleware(req, res, next) {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token || token !== API_TOKEN) {
-        return res.status(401).json({ error: 'Unauthorized' });
+// ---------- AUTHENTICATION ----------
+// Token-based auth protecting every /api route except /api/health.
+// The token is read from either:
+//   - the "Authorization: Bearer <token>" header (used by the dashboard), or
+//   - the "?token=<token>" query parameter (handy for curl / monitoring).
+// Comparison is timing-safe to prevent leaking the token byte-by-byte.
+function safeTokenCompare(provided, expected) {
+    const a = Buffer.from(String(provided));
+    const b = Buffer.from(String(expected));
+    if (a.length !== b.length) {
+        // Burn the same amount of time as a successful compare, then fail.
+        crypto.timingSafeEqual(b, b);
+        return false;
     }
+    return crypto.timingSafeEqual(a, b);
+}
+
+function extractRequestToken(req) {
+    const header = req.headers.authorization || '';
+    const headerToken = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim();
+    const queryToken = typeof req.query.token === 'string' ? req.query.token.trim() : null;
+    return headerToken || queryToken || null;
+}
+
+function authMiddleware(req, res, next) {
+    // Fail closed: without API_TOKEN the API is unusable rather than open.
+    if (!API_TOKEN) {
+        console.error('[Auth] REJECTED — API_TOKEN is not set in the environment. Refusing all requests.');
+        return res.status(500).json({
+            error: 'Server authentication is not configured. Set API_TOKEN in the environment and restart.'
+        });
+    }
+
+    const token = extractRequestToken(req);
+    const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
+
+    if (!token) {
+        console.warn(`[Auth] DENIED (no token) ${req.method} ${req.originalUrl} from ${clientIp}`);
+        return res.status(401).json({
+            error: 'Unauthorized. Provide the API token via the "Authorization: Bearer <token>" header or a ?token= query parameter.'
+        });
+    }
+
+    if (!safeTokenCompare(token, API_TOKEN)) {
+        console.warn(`[Auth] DENIED (invalid token: ${token.slice(0, 4)}***) ${req.method} ${req.originalUrl} from ${clientIp}`);
+        return res.status(401).json({ error: 'Unauthorized. Invalid API token.' });
+    }
+
+    console.log(`[Auth] OK ${req.method} ${req.originalUrl} from ${clientIp}`);
     next();
 }
 
-// Configure multer for CV uploads
-// Sanitize filename to prevent path traversal
+// Health check stays public (uptime monitors, Render health checks).
+// It is registered BEFORE the auth middleware below, so it needs no token.
+app.get('/api/health', async(req, res) => {
+    try {
+        await pool.query('SELECT 1');
+        res.json({ status: 'ok', database: 'connected' });
+    } catch (err) {
+        res.status(503).json({ status: 'error', database: 'disconnected', error: err.message });
+    }
+});
+
+// Everything below this line requires a valid token.
+app.use(authMiddleware);
+
+// ---------- INPUT VALIDATION HELPERS ----------
+// XSS-neutralizing sanitizer for string inputs (query params, setting values).
+const sanitize = (value) => (typeof value === 'string' ? Filter(value) : value);
+
+/**
+ * Returns req.query without the auth `token` param, so ?token= requests
+ * aren't rejected by strict query validation.
+ */
+function sanitizedQuery(req) {
+    const { token, ...rest } = req.query;
+    return rest;
+}
+
+/** Recursively sanitizes every string inside a parsed JSON value. */
+function sanitizeDeep(value) {
+    if (typeof value === 'string') return Filter(value);
+    if (Array.isArray(value)) return value.map(sanitizeDeep);
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, sanitizeDeep(v)]));
+    }
+    return value;
+}
+
+/**
+ * Validates data against a zod schema and responds 400 with clear messages
+ * on failure. Returns the parsed (and coerced) data, or null if invalid.
+ */
+function validate(schema, data, res, label) {
+    const result = schema.safeParse(data);
+    if (!result.success) {
+        const details = result.error.issues.map((i) => `${i.path.join('.') || label}: ${i.message}`);
+        res.status(400).json({ error: `Invalid ${label}`, details });
+        return null;
+    }
+    return result.data;
+}
+
+/** Distinguishes user-input errors (400) from server faults (500). */
+class ValidationError extends Error {}
+
+const postingsQuerySchema = z.object({
+    minScore: z.coerce.number().int().min(0).max(100).optional(),
+    maxScore: z.coerce.number().int().min(0).max(100).optional(),
+    company: z.string().trim().max(200).optional(),
+    location: z.string().trim().max(200).optional(),
+    notified: z.enum(['all', 'notified', 'not-notified']).optional(),
+    sort: z.enum(['fit_score', 'created_at', 'company', 'title']).optional(),
+    order: z.enum(['asc', 'desc']).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
+    offset: z.coerce.number().int().min(0).optional(),
+}).strict();
+
+const limitQuerySchema = z.object({
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+}).strict();
+
+const jobIdParamSchema = z.object({
+    id: z.string().trim().min(1).max(200),
+}).strict();
+
+// Setting keys that may be written. scrape_interval_minutes was removed —
+// the schedule is controlled solely by the GitHub Actions cron.
+const SETTING_KEYS = [
+    'results_wanted',
+    'hours_old',
+    'search_terms',
+    'locations',
+    'job_sites',
+    'title_keywords',
+    'fit_score_threshold',
+];
+
+const settingKeyParamSchema = z.object({
+    key: z.enum(SETTING_KEYS),
+}).strict();
+
+const bulkSettingsBodySchema = z.object({
+    settings: z.record(z.string().max(100), z.string().max(5000)),
+}).strict();
+
+const singleSettingBodySchema = z.object({
+    value: z.string().max(5000),
+}).strict();
+
+// ---------- CV UPLOAD (Supabase Storage) ----------
+// Sanitize filename to prevent path traversal and odd characters.
 const sanitizeFilename = (filename) => {
     return path.basename(filename).replace(/[^a-zA-Z0-9.-]/g, '_');
 };
 
-// Verify extension matches MIME type
-const extToMime = {
-    '.pdf': 'application/pdf',
-    '.doc': 'application/msword',
-    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-};
-
-const storage = multer.diskStorage({
-    destination: async(req, file, cb) => {
-        // Ensure upload directory exists
-        if (!existsSync(CV_UPLOAD_DIR)) {
-            await mkdir(CV_UPLOAD_DIR, { recursive: true });
-        }
-        cb(null, CV_UPLOAD_DIR);
-    },
-    filename: (req, file, cb) => {
-        // Generate unique filename with timestamp
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        const ext = path.extname(file.originalname);
-        cb(null, 'cv-' + uniqueSuffix + ext);
-    }
-});
-
+// Configure multer for CV uploads.
+// Files are held IN MEMORY (never written to disk) and pushed straight to
+// Supabase Storage — Render's disk is ephemeral, so local copies would be
+// lost on redeploy anyway.
 const upload = multer({
-    storage: storage,
+    storage: multer.memoryStorage(),
     limits: {
-        fileSize: 5 * 1024 * 1024, // 5MB limit
+        fileSize: 10 * 1024 * 1024, // 10MB limit
+        files: 1,
     },
     fileFilter: (req, file, cb) => {
-        // Accept PDFs and common document formats
-        const allowedMimes = [
-            'application/pdf',
-            'application/msword',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        ];
-        const allowedExts = ['.pdf', '.doc', '.docx'];
-        const ext = path.extname(file.originalname).toLowerCase();
-
-        // Check if extension matches MIME type
-        if (file.mimetype !== extToMime[ext]) {
-            return cb(new Error('File extension does not match content type'));
+        // 1) Only PDF is accepted.
+        if (file.mimetype !== 'application/pdf' || path.extname(file.originalname).toLowerCase() !== '.pdf') {
+            return cb(new Error('Invalid file type. Only PDF files are allowed.'));
         }
 
-        if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
-            cb(null, true);
-        } else {
-            cb(new Error('Invalid file type. Only PDF and Word documents are allowed.'));
+        // 2) File name sanity: no special characters, reasonable length.
+        const baseName = path.basename(file.originalname);
+        const MAX_FILENAME_LENGTH = 255;
+        if (!baseName || baseName.length > MAX_FILENAME_LENGTH) {
+            return cb(new Error(`File name is empty or longer than ${MAX_FILENAME_LENGTH} characters.`));
         }
+        if (!/^[a-zA-Z0-9._\- ]+$/.test(baseName)) {
+            return cb(new Error('File name contains invalid characters. Use letters, numbers, spaces, dots, dashes or underscores.'));
+        }
+
+        cb(null, true);
     }
 });
 
@@ -193,53 +342,40 @@ function formatPosting(row) {
 
 // ---------- ROUTES ----------
 
-// Health check
-app.get('/api/health', async(req, res) => {
-    try {
-        await pool.query('SELECT 1');
-        res.json({ status: 'ok', database: 'connected' });
-    } catch (err) {
-        res.status(503).json({ status: 'error', database: 'disconnected', error: err.message });
-    }
-});
-
 // Get all postings with filters
 app.get('/api/postings', async(req, res) => {
     try {
-        const { minScore, maxScore, company, location, notified, sort, order, limit, offset } = req.query;
+        // Validate + coerce every query parameter (zod, strict — unknown
+        // params are rejected). Strings are XSS-sanitized before use.
+        const query = validate(postingsQuerySchema, sanitizedQuery(req), res, 'query parameters');
+        if (query === null) return;
+
+        const { minScore, maxScore, company, location, notified, sort, order, limit, offset } = query;
 
         let sql = 'SELECT * FROM job_postings WHERE 1=1';
         const params = [];
         let paramIndex = 1;
 
-        // Fit score filter with validation
+        // Fit score filter (already validated 0-100 by zod)
         if (minScore !== undefined) {
-            const score = parseInt(minScore);
-            if (isNaN(score) || score < 0 || score > 100) {
-                return res.status(400).json({ error: 'minScore must be between 0 and 100' });
-            }
             sql += ` AND fit_score >= $${paramIndex++}`;
-            params.push(score);
+            params.push(minScore);
         }
         if (maxScore !== undefined) {
-            const score = parseInt(maxScore);
-            if (isNaN(score) || score < 0 || score > 100) {
-                return res.status(400).json({ error: 'maxScore must be between 0 and 100' });
-            }
             sql += ` AND fit_score <= $${paramIndex++}`;
-            params.push(score);
+            params.push(maxScore);
         }
 
-        // Company filter (case-insensitive partial match)
+        // Company filter (case-insensitive partial match, sanitized)
         if (company) {
             sql += ` AND company ILIKE $${paramIndex++}`;
-            params.push(`%${company}%`);
+            params.push(`%${sanitize(company)}%`);
         }
 
-        // Location filter (case-insensitive partial match)
+        // Location filter (case-insensitive partial match, sanitized)
         if (location) {
             sql += ` AND location ILIKE $${paramIndex++}`;
-            params.push(`%${location}%`);
+            params.push(`%${sanitize(location)}%`);
         }
 
         // Notification status filter
@@ -249,7 +385,7 @@ app.get('/api/postings', async(req, res) => {
             sql += ' AND notified_at IS NULL';
         }
 
-        // Sorting with strict whitelist
+        // Sorting — strict whitelist via zod enum above; safe to interpolate.
         const ALLOWED_SORTS = {
             'fit_score': 'fit_score',
             'created_at': 'created_at',
@@ -260,9 +396,9 @@ app.get('/api/postings', async(req, res) => {
         const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
         sql += ` ORDER BY ${sortField} ${sortOrder}`;
 
-        // Pagination with validation
-        const limitVal = limit ? Math.min(Math.max(parseInt(limit), 1), 100) : 100;
-        const offsetVal = offset ? Math.max(parseInt(offset), 0) : 0;
+        // Pagination (validated + clamped by zod: limit 1-100, offset >= 0)
+        const limitVal = limit ?? 100;
+        const offsetVal = offset ?? 0;
         sql += ` LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
         params.push(limitVal, offsetVal);
 
@@ -277,9 +413,11 @@ app.get('/api/postings', async(req, res) => {
 // Get single posting by job_id
 app.get('/api/postings/:id', async(req, res) => {
     try {
-        const { id } = req.params;
+        const params = validate(jobIdParamSchema, req.params, res, 'path parameters');
+        if (params === null) return;
+
         const { rows } = await pool.query(
-            'SELECT * FROM job_postings WHERE job_id = $1', [id]
+            'SELECT * FROM job_postings WHERE job_id = $1', [sanitize(params.id)]
         );
 
         if (rows.length === 0) {
@@ -379,8 +517,10 @@ app.get('/api/distribution', async(req, res) => {
 // Get recent run history (reads from database, not local file)
 app.get('/api/runs', async(req, res) => {
     try {
-        const { limit } = req.query;
-        const limitVal = limit ? Math.min(parseInt(limit), 50) : 10;
+        const query = validate(limitQuerySchema, sanitizedQuery(req), res, 'query parameters');
+        if (query === null) return;
+
+        const limitVal = query.limit ?? 10;
 
         const { rows } = await pool.query(
             `SELECT id, status, step, postings_found, postings_inserted, postings_scored,
@@ -486,28 +626,14 @@ app.get('/api/settings/:key', async(req, res) => {
 // Update single setting (requires authentication)
 app.put('/api/settings/:key', authMiddleware, async(req, res) => {
     try {
-        const { key } = req.params;
-        const { value } = req.body;
+        const params = validate(settingKeyParamSchema, req.params, res, 'path parameters');
+        if (params === null) return;
 
-        if (value === undefined) {
-            return res.status(400).json({ error: 'Value is required' });
-        }
+        const body = validate(singleSettingBodySchema, req.body, res, 'request body');
+        if (body === null) return;
 
-        // Validate setting key
-        const validKeys = [
-            'scrape_interval_minutes',
-            'results_wanted',
-            'hours_old',
-            'search_terms',
-            'locations',
-            'job_sites',
-            'title_keywords',
-            'fit_score_threshold',
-        ];
-
-        if (!validKeys.includes(key)) {
-            return res.status(400).json({ error: `Invalid setting key: ${key}` });
-        }
+        const { key } = params;
+        const value = sanitize(body.value);
 
         // Validate value based on key
         const validationError = validateSetting(key, value);
@@ -541,10 +667,16 @@ app.put('/api/settings/:key', authMiddleware, async(req, res) => {
 // Update multiple settings at once (requires authentication)
 app.put('/api/settings', authMiddleware, async(req, res) => {
     try {
-        const { settings } = req.body;
+        const body = validate(bulkSettingsBodySchema, req.body, res, 'request body');
+        if (body === null) return;
 
-        if (!settings || typeof settings !== 'object') {
-            return res.status(400).json({ error: 'Settings object is required' });
+        const settings = body.settings;
+
+        // Reject unknown/deprecated keys up front — silently ignoring them
+        // would make the dashboard believe a setting was saved when it wasn't.
+        const unknownKeys = Object.keys(settings).filter(k => !SETTING_KEYS.includes(k));
+        if (unknownKeys.length > 0) {
+            return res.status(400).json({ error: `Invalid setting key(s): ${unknownKeys.join(', ')}` });
         }
 
         const client = await pool.connect();
@@ -553,11 +685,12 @@ app.put('/api/settings', authMiddleware, async(req, res) => {
         try {
             await client.query('BEGIN');
 
-            for (const [key, value] of Object.entries(settings)) {
-                // Validate
+            for (const [key, rawValue] of Object.entries(settings)) {
+                // Sanitize + validate (JSON arrays get each element sanitized)
+                const value = sanitizeDeep(rawValue);
                 const validationError = validateSetting(key, value);
                 if (validationError) {
-                    throw new Error(`Invalid setting ${key}: ${validationError}`);
+                    throw new ValidationError(`Invalid setting ${key}: ${validationError}`);
                 }
 
                 const result = await client.query(
@@ -585,6 +718,9 @@ app.put('/api/settings', authMiddleware, async(req, res) => {
         }
     } catch (err) {
         console.error('Error updating settings:', err);
+        if (err instanceof ValidationError) {
+            return res.status(400).json({ error: err.message });
+        }
         res.status(500).json({ error: err.message || 'Failed to update settings' });
     }
 });
@@ -593,7 +729,6 @@ app.put('/api/settings', authMiddleware, async(req, res) => {
 app.post('/api/settings/reset', authMiddleware, async(req, res) => {
     try {
         const defaults = {
-            scrape_interval_minutes: '300',
             results_wanted: '10',
             hours_old: '336',
             search_terms: '["software engineering internship"]',
@@ -636,12 +771,8 @@ app.post('/api/settings/reset', authMiddleware, async(req, res) => {
 
 function validateSetting(key, value) {
     switch (key) {
-        case 'scrape_interval_minutes':
-            const interval = parseInt(value);
-            if (isNaN(interval) || interval < 5 || interval > 1440) {
-                return 'scrape_interval_minutes must be between 5 and 1440 (24 hours)';
-            }
-            break;
+        // NOTE: scrape_interval_minutes was removed — the pipeline schedule
+        // is controlled solely by the GitHub Actions cron (0 */5 * * *).
 
         case 'results_wanted':
             const results = parseInt(value);
@@ -690,12 +821,25 @@ function validateSetting(key, value) {
 
 // ---------- CV MANAGEMENT ROUTES ----------
 
-// Upload CV file (requires authentication)
+// Upload CV file (requires authentication).
+// The file is stored in the Supabase Storage "cvs" bucket and its public URL
+// is saved in cvs.file_path — survives redeploys, unlike the old local-disk
+// approach on Render's ephemeral filesystem.
 app.post('/api/cv/upload', authMiddleware, upload.single('cv'), async(req, res) => {
     try {
         if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded' });
+            return res.status(400).json({ error: 'No file uploaded. Attach a PDF in a multipart/form-data "cv" field.' });
         }
+
+        if (!isSupabaseConfigured()) {
+            return res.status(503).json({
+                error: 'CV storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_KEY in the environment, then restart the API.'
+            });
+        }
+
+        // Unique, sanitized object name inside the bucket.
+        const storedName = `cv-${Date.now()}-${Math.round(Math.random() * 1E9)}.pdf`;
+        const publicUrl = await uploadCvToStorage(req.file.buffer, storedName, req.file.mimetype);
 
         const client = await pool.connect();
 
@@ -705,14 +849,14 @@ app.post('/api/cv/upload', authMiddleware, upload.single('cv'), async(req, res) 
             // Deactivate any existing active CVs
             await client.query('UPDATE cvs SET is_active = false WHERE is_active = true');
 
-            // Insert new CV record
+            // Insert new CV record (file_path now points at Supabase Storage)
             const { rows } = await client.query(
                 `INSERT INTO cvs (filename, original_name, file_path, file_size, mime_type, is_active)
                  VALUES ($1, $2, $3, $4, $5, true)
                  RETURNING id, filename, original_name, file_size, mime_type, uploaded_at`, [
-                    req.file.filename,
-                    req.file.originalname,
-                    req.file.path,
+                    storedName,
+                    sanitizeFilename(req.file.originalname),
+                    publicUrl,
                     req.file.size,
                     req.file.mimetype
                 ]
@@ -733,15 +877,15 @@ app.post('/api/cv/upload', authMiddleware, upload.single('cv'), async(req, res) 
             });
         } catch (err) {
             await client.query('ROLLBACK');
-            // Delete uploaded file if database insert failed
-            await unlink(req.file.path).catch(() => {});
+            // Orphaned object in Storage if the DB insert failed — clean it up.
+            await deleteCvFile(publicUrl).catch(() => {});
             throw err;
         } finally {
             client.release();
         }
     } catch (err) {
         console.error('Error uploading CV:', err);
-        res.status(500).json({ error: 'Failed to upload CV' });
+        res.status(500).json({ error: err.message || 'Failed to upload CV' });
     }
 });
 
@@ -793,16 +937,28 @@ app.get('/api/cv/download', async(req, res) => {
 
         const cv = rows[0];
 
+        // Sanitize filename for Content-Disposition header
+        const sanitizedFilename = cv.original_name.replace(/["\r\n]/g, '');
+        res.setHeader('Content-Type', cv.mime_type || 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${sanitizedFilename}"`);
+
+        // New storage model: file_path is a Supabase public URL.
+        if (/^https?:\/\//i.test(cv.file_path)) {
+            try {
+                const buffer = await downloadCvFromStorage(cv.file_path);
+                return res.send(buffer);
+            } catch (err) {
+                console.error('Error downloading CV from Supabase:', err);
+                return res.status(404).json({ error: 'CV file could not be fetched from Supabase Storage' });
+            }
+        }
+
+        // Legacy fallback: pre-migration rows may still hold a local path.
         if (!existsSync(cv.file_path)) {
             return res.status(404).json({ error: 'CV file not found on disk' });
         }
 
         const fileContent = await readFile(cv.file_path);
-
-        // Sanitize filename for Content-Disposition header
-        const sanitizedFilename = cv.original_name.replace(/["\r\n]/g, '');
-        res.setHeader('Content-Type', cv.mime_type);
-        res.setHeader('Content-Disposition', `attachment; filename="${sanitizedFilename}"`);
         res.send(fileContent);
     } catch (err) {
         console.error('Error downloading CV:', err);
@@ -835,9 +991,12 @@ app.delete('/api/cv', authMiddleware, async(req, res) => {
 
             await client.query('COMMIT');
 
-            // Delete file from filesystem
-            if (existsSync(cv.file_path)) {
-                await unlink(cv.file_path);
+            // Delete the file: Supabase Storage for URL rows, disk for legacy
+            // path rows. Best-effort — the DB record is already gone.
+            try {
+                await deleteCvFile(cv.file_path);
+            } catch (storageErr) {
+                console.warn('Failed to delete CV file from storage:', storageErr.message);
             }
 
             res.json({ message: 'CV deleted successfully' });
@@ -857,7 +1016,7 @@ app.delete('/api/cv', authMiddleware, async(req, res) => {
 app.use((error, req, res, next) => {
     if (error instanceof multer.MulterError) {
         if (error.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ error: 'File too large. Maximum size is 5MB.' });
+            return res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
         }
         return res.status(400).json({ error: error.message });
     } else if (error) {
@@ -868,8 +1027,9 @@ app.use((error, req, res, next) => {
 
 // ---------- PIPELINE MANAGEMENT ROUTES ----------
 
-// Trigger immediate pipeline run (requires authentication)
-app.post('/api/pipeline/trigger', authMiddleware, async(req, res) => {
+// Trigger immediate pipeline run (requires authentication).
+// Strictly rate limited — spawning the scraper + Gemini scoring is expensive.
+app.post('/api/pipeline/trigger', pipelineLimiter, authMiddleware, async(req, res) => {
     try {
         // Check if a run is already in progress
         if (currentPipelineRun && currentPipelineRun.status === 'running') {
@@ -982,8 +1142,10 @@ app.get('/api/pipeline/status', async(req, res) => {
 // Get pipeline run history
 app.get('/api/pipeline/runs', async(req, res) => {
     try {
-        const { limit } = req.query;
-        const limitVal = limit ? Math.min(parseInt(limit), 50) : 20;
+        const query = validate(limitQuerySchema, sanitizedQuery(req), res, 'query parameters');
+        if (query === null) return;
+
+        const limitVal = query.limit ?? 20;
 
         const { rows } = await pool.query(
             `SELECT id, status, step, postings_found, postings_inserted, postings_scored,
@@ -1022,9 +1184,10 @@ async function executePipeline(runId) {
     try {
         // Resolve the CV BEFORE scraping — no point scraping job postings if
         // we have no CV to score them against. The dashboard uploads CVs to
-        // disk and records the path in the `cvs` table; pass that path to the
-        // pipeline child process via CV_FILE_PATH (the child has no other way
-        // of discovering it).
+        // Supabase Storage and records the public URL in the `cvs` table.
+        // The child process receives that URL via CV_SUPABASE_URL and
+        // downloads the file itself (gemini-scoring.mjs). Legacy rows that
+        // still hold a local path keep working via CV_FILE_PATH.
         const { rows: cvRows } = await pool.query(
             `SELECT file_path
              FROM cvs
@@ -1037,9 +1200,19 @@ async function executePipeline(runId) {
             throw new Error('No CV uploaded yet. Upload a CV on the Settings page, then run the pipeline again.');
         }
 
-        const cvFilePath = path.resolve(cvRows[0].file_path);
-        if (!existsSync(cvFilePath)) {
-            throw new Error(`CV file missing on disk: ${cvFilePath}. The service filesystem is ephemeral on Render — re-upload your CV after every deploy/restart.`);
+        const cvFileRef = cvRows[0].file_path;
+        const isStorageUrl = /^https?:\/\//i.test(cvFileRef);
+
+        // Legacy local path — verify it still exists (ephemeral filesystems).
+        let cvEnv = {};
+        if (!isStorageUrl) {
+            const cvFilePath = path.resolve(cvFileRef);
+            if (!existsSync(cvFilePath)) {
+                throw new Error(`CV file missing on disk: ${cvFilePath}. The service filesystem is ephemeral on Render — re-upload your CV after every deploy/restart.`);
+            }
+            cvEnv = { CV_FILE_PATH: cvFilePath };
+        } else {
+            cvEnv = { CV_SUPABASE_URL: cvFileRef };
         }
 
         // Update step: scraping
@@ -1081,7 +1254,7 @@ async function executePipeline(runId) {
         const pipelineProcess = spawn('node', ['pfe-hunter-pipeline.mjs'], {
             cwd: __dirname,
             stdio: 'pipe',
-            env: { ...process.env, CV_FILE_PATH: cvFilePath }
+            env: { ...process.env, ...cvEnv }
         });
 
         let pipelineOutput = '';
@@ -1176,9 +1349,14 @@ async function start() {
         // Ensure database schema exists
         await ensureSchema();
 
+        // Ensure the Supabase Storage "cvs" bucket exists (no-op if already
+        // created, and a no-op warning when Supabase is not configured).
+        await ensureCvBucket();
+
         app.listen(PORT, () => {
             console.log(`PFE Hunter API running on http://localhost:${PORT}`);
             console.log(`Health check: http://localhost:${PORT}/api/health`);
+            console.log(API_TOKEN ? 'Auth: token required on all endpoints except /api/health' : 'Auth: DISABLED — set API_TOKEN!');
         });
     } catch (err) {
         console.error('Failed to start API server:', err);

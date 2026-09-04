@@ -1,19 +1,21 @@
 import { useState, useEffect } from 'react'
 import { getSettings, updateSettings, resetSettings, getCV, uploadCV, deleteCV } from '../api/api'
+import { useToast } from '../components/Toast'
 import '../styles/Settings.css'
 
 function Settings() {
+  const toast = useToast()
   const [settings, setSettings] = useState({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
-  const [success, setSuccess] = useState(null)
   const [hasChanges, setHasChanges] = useState(false)
   const [originalSettings, setOriginalSettings] = useState({})
 
   // Form state for each setting
+  // NOTE: scrape_interval_minutes was removed — the pipeline schedule is
+  // controlled solely by the GitHub Actions cron (see the Scheduling note).
   const [formData, setFormData] = useState({
-    scrape_interval_minutes: 300,
     results_wanted: 10,
     hours_old: 336,
     fit_score_threshold: 70,
@@ -59,10 +61,10 @@ function Settings() {
       setError(null)
       await uploadCV(file)
       await fetchCV()
-      setSuccess('CV uploaded successfully!')
-      setTimeout(() => setSuccess(null), 3000)
+      toast.success('CV uploaded successfully!')
     } catch (err) {
       setError('Failed to upload CV: ' + err.message)
+      toast.error('Failed to upload CV: ' + err.message)
     } finally {
       setCVUploading(false)
       event.target.value = '' // Reset file input
@@ -76,10 +78,10 @@ function Settings() {
       setCVLoading(true)
       await deleteCV()
       setCV(null)
-      setSuccess('CV deleted successfully!')
-      setTimeout(() => setSuccess(null), 3000)
+      toast.success('CV deleted successfully!')
     } catch (err) {
       setError('Failed to delete CV: ' + err.message)
+      toast.error('Failed to delete CV: ' + err.message)
     } finally {
       setCVLoading(false)
     }
@@ -93,7 +95,6 @@ function Settings() {
 
       // Parse settings into form data
       const parsed = {
-        scrape_interval_minutes: parseInt(data.scrape_interval_minutes?.value || 300),
         results_wanted: parseInt(data.results_wanted?.value || 10),
         hours_old: parseInt(data.hours_old?.value || 336),
         fit_score_threshold: parseInt(data.fit_score_threshold?.value || 70),
@@ -116,7 +117,6 @@ function Settings() {
   const handleChange = (key, value) => {
     setFormData(prev => ({ ...prev, [key]: value }))
     setHasChanges(true)
-    setSuccess(null)
   }
 
   const handleArrayAdd = (key, value, setter) => {
@@ -135,10 +135,6 @@ function Settings() {
 
   const validate = () => {
     const errors = []
-
-    if (formData.scrape_interval_minutes < 5 || formData.scrape_interval_minutes > 1440) {
-      errors.push('Scrape interval must be between 5 and 1440 minutes')
-    }
 
     if (formData.results_wanted < 1 || formData.results_wanted > 50) {
       errors.push('Results wanted must be between 1 and 50')
@@ -180,7 +176,6 @@ function Settings() {
 
       const payload = {
         settings: {
-          scrape_interval_minutes: formData.scrape_interval_minutes.toString(),
           results_wanted: formData.results_wanted.toString(),
           hours_old: formData.hours_old.toString(),
           fit_score_threshold: formData.fit_score_threshold.toString(),
@@ -192,14 +187,12 @@ function Settings() {
       }
 
       await updateSettings(payload)
-      setSuccess('Settings saved successfully!')
+      toast.success('Settings saved successfully!')
       setHasChanges(false)
       setOriginalSettings(formData)
-
-      // Clear success message after 3 seconds
-      setTimeout(() => setSuccess(null), 3000)
     } catch (err) {
       setError('Failed to save settings: ' + err.message)
+      toast.error('Failed to save settings: ' + err.message)
     } finally {
       setSaving(false)
     }
@@ -209,7 +202,6 @@ function Settings() {
     setFormData(originalSettings)
     setHasChanges(false)
     setError(null)
-    setSuccess(null)
   }
 
   const handleResetToDefaults = async () => {
@@ -219,11 +211,11 @@ function Settings() {
       setSaving(true)
       await resetSettings()
       await fetchSettings()
-      setSuccess('Settings reset to defaults!')
+      toast.success('Settings reset to defaults!')
       setHasChanges(false)
-      setTimeout(() => setSuccess(null), 3000)
     } catch (err) {
       setError('Failed to reset settings: ' + err.message)
+      toast.error('Failed to reset settings: ' + err.message)
     } finally {
       setSaving(false)
     }
@@ -257,33 +249,22 @@ function Settings() {
         </div>
       )}
 
-      {success && (
-        <div className="settings-success">
-          <span className="success-icon">✅</span>
-          {success}
-        </div>
-      )}
-
       <div className="settings-grid">
         {/* Scrape Configuration */}
         <section className="settings-section">
           <h2>📅 Scrape Configuration</h2>
 
-          <div className="setting-item">
-            <label htmlFor="scrape_interval_minutes">
-              Scrape Interval (minutes)
-              <span className="setting-description">How often to run the scraper automatically</span>
-            </label>
-            <input
-              id="scrape_interval_minutes"
-              type="number"
-              min="5"
-              max="1440"
-              value={formData.scrape_interval_minutes}
-              onChange={(e) => handleChange('scrape_interval_minutes', parseInt(e.target.value) || 5)}
-              className="setting-input"
-            />
-            <span className="setting-hint">Min: 5, Max: 1440 (24 hours)</span>
+          <div className="setting-info-box">
+            <h3>⏰ Scheduling</h3>
+            <p>
+              The pipeline runs automatically <strong>every 5 hours</strong> via GitHub Actions
+              (cron <code>0 */5 * * *</code>). There is nothing to configure here — the
+              schedule lives in <code>.github/workflows/pipeline.yml</code>.
+            </p>
+            <p>
+              Need results sooner? Use the <strong>▶️ Run Now</strong> button on the Dashboard
+              to trigger a manual run.
+            </p>
           </div>
 
           <div className="setting-item">
@@ -520,7 +501,7 @@ function Settings() {
                     📤 Replace
                     <input
                       type="file"
-                      accept=".pdf,.doc,.docx"
+                      accept=".pdf,application/pdf"
                       onChange={handleCVUpload}
                       style={{ display: 'none' }}
                       disabled={cvUploading}
@@ -542,10 +523,10 @@ function Settings() {
                   <span className="cv-upload-text">
                     {cvUploading ? 'Uploading...' : 'Upload CV'}
                   </span>
-                  <span className="cv-upload-hint">PDF or Word document (max 5MB)</span>
+                  <span className="cv-upload-hint">PDF only (max 10MB)</span>
                   <input
                     type="file"
-                    accept=".pdf,.doc,.docx"
+                    accept=".pdf,application/pdf"
                     onChange={handleCVUpload}
                     style={{ display: 'none' }}
                     disabled={cvUploading}

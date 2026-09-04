@@ -1,17 +1,22 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { getStats, getRuns, getScoreDistribution } from '../api/index.js'
+import { getStats, getRuns, getScoreDistribution, triggerPipeline } from '../api/api'
 import StatCard from '../components/StatCard'
 import ActivityTimeline from '../components/ActivityTimeline'
 import ScoreChart from '../components/ScoreChart'
 import ErrorMessage from '../components/ErrorMessage'
 import RunNowButton from '../components/RunNowButton'
 import FitScoreInfo from '../components/FitScoreInfo'
+import { useToast } from '../components/Toast'
 import '../styles/Dashboard.css'
 
 // Auto-refresh interval (30 seconds)
 const REFETCH_INTERVAL = 30 * 1000
 
 function Dashboard() {
+  const toast = useToast()
+  const [firstRunLoading, setFirstRunLoading] = useState(false)
+
   const { data: stats, isLoading: statsLoading, error: statsError, refetch: refetchStats } = useQuery({
     queryKey: ['stats'],
     queryFn: getStats,
@@ -32,6 +37,20 @@ function Dashboard() {
     refetchInterval: REFETCH_INTERVAL,
     retry: 2,
   })
+
+  // One-click first run from the empty activity state
+  const handleFirstRun = async () => {
+    try {
+      setFirstRunLoading(true)
+      await triggerPipeline()
+      toast.success('Pipeline started — progress appears on the Dashboard header.')
+      refetchRuns()
+    } catch (err) {
+      toast.error('Failed to start pipeline: ' + err.message)
+    } finally {
+      setFirstRunLoading(false)
+    }
+  }
 
   // Show error if any query failed
   const hasError = statsError || runsError || distributionError
@@ -136,7 +155,17 @@ function Dashboard() {
               <div className="empty-activity">
                 <span className="empty-chart-icon">⏱️</span>
                 <p>No activity yet</p>
-                <p className="text-muted">Pipeline runs will appear here</p>
+                <p className="text-muted">
+                  Run your first pipeline to start collecting and scoring job postings.
+                  It also runs automatically every 5 hours via GitHub Actions.
+                </p>
+                <button
+                  className="btn btn-primary empty-activity-cta"
+                  onClick={handleFirstRun}
+                  disabled={firstRunLoading}
+                >
+                  {firstRunLoading ? 'Starting...' : '▶️ Run your first pipeline'}
+                </button>
               </div>
             ) : (
               <ActivityTimeline runs={runs} />

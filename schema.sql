@@ -54,7 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_user_settings_key ON user_settings (setting_key);
 -- Default settings
 INSERT INTO user_settings (setting_key, setting_value, description) VALUES
     -- Scrape configuration
-    ('scrape_interval_minutes', '300', 'How often to run the scraper (in minutes). Default: 5 hours = 300 min'),
+    ('scrape_interval_minutes', '300', 'DEPRECATED (unused): the schedule is controlled solely by the GitHub Actions cron (0 */5 * * * = every 5 hours)'),
     ('results_wanted', '10', 'Number of job postings to fetch per source. Max: 50'),
     ('hours_old', '336', 'Only fetch jobs posted within this many hours'),
 

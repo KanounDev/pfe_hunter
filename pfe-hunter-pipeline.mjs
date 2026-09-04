@@ -105,23 +105,26 @@ async function main() {
         await ensureSchema();
 
         step = 'cv-upload';
-        // CV resolution order: CV_FILE_PATH env var (set by api.mjs when it
-        // spawns this pipeline, or in CI) → the CV uploaded via the dashboard
-        // (its path is stored in the `cvs` table).
-        let cvPath = process.env.CV_FILE_PATH;
-        if (!cvPath) {
-            cvPath = await getActiveCvPath();
-            if (cvPath) {
-                console.log(`CV_FILE_PATH not set — using CV uploaded via dashboard: ${cvPath}`);
+        // CV resolution order: CV_FILE_PATH env var (set in CI) →
+        // CV_SUPABASE_URL env var (set by api.mjs when it spawns this
+        // pipeline) → the CV uploaded via the dashboard (its Supabase URL is
+        // stored in the `cvs` table). gemini-scoring.mjs downloads URLs to a
+        // temp file before uploading to Gemini.
+        let cvRef = process.env.CV_FILE_PATH || process.env.CV_SUPABASE_URL;
+        if (!cvRef) {
+            cvRef = await getActiveCvPath();
+            if (cvRef) {
+                console.log(`No CV env var set — using CV uploaded via dashboard: ${cvRef}`);
             }
         }
-        if (!cvPath) {
+        if (!cvRef) {
             throw new Error('No CV available. Set CV_FILE_PATH in the environment or upload a CV via the dashboard Settings page.');
         }
-        if (!existsSync(cvPath)) {
-            throw new Error(`CV file not found on disk at "${cvPath}". If the service was redeployed, the uploaded file was wiped (ephemeral filesystem) — re-upload the CV in the dashboard Settings page.`);
+        // Supabase URLs aren't on disk — existence is verified at download time.
+        if (!/^https?:\/\//i.test(cvRef) && !existsSync(cvRef)) {
+            throw new Error(`CV file not found on disk at "${cvRef}". If the service was redeployed, the uploaded file was wiped (ephemeral filesystem) — re-upload the CV in the dashboard Settings page.`);
         }
-        await initScoring(cvPath);
+        await initScoring(cvRef);
 
         step = 'load';
         const postings = await loadUnscoredPostings();

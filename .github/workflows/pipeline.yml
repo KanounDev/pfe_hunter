@@ -18,7 +18,9 @@ name: PFE Hunter Pipeline
 
 on:
   schedule:
-    # Run every 5 hours (at 00:00, 05:00, 10:00, 15:00, 20:00 UTC)
+    # Run every 5 hours (at 00:00, 05:00, 10:00, 15:00, 20:00 UTC).
+    # This cron is the ONLY scheduling mechanism — the dashboard has no
+    # interval setting.
     - cron: '0 */5 * * *'
   workflow_dispatch:
     # Allow manual trigger from GitHub Actions tab

@@ -80,6 +80,11 @@
   margin-bottom: 0.25rem;
 }
 
+/* "Run your first pipeline" CTA in the empty activity state */
+.empty-activity-cta {
+  margin-top: 1rem;
+}
+
 /* Error banner */
 .error-banner {
   display: flex;
