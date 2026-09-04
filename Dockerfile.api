@@ -24,8 +24,10 @@ RUN npm ci --only=production
 COPY api.mjs ./
 COPY db.mjs ./
 COPY schema.sql ./
+COPY supabase-storage.mjs ./
 COPY notifications.mjs ./
 COPY scrape_jobspy.py ./
+COPY scrape_jobteaser.py ./
 COPY pfe-hunter-pipeline.mjs ./
 COPY gemini-scoring.mjs ./
 COPY gemini-mcp-client.mjs ./

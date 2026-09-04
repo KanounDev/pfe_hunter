@@ -28,6 +28,7 @@ COPY run_periodic.py ./
 # Copy Node.js pipeline scripts
 COPY pfe-hunter-pipeline.mjs ./
 COPY gemini-scoring.mjs ./
+COPY supabase-storage.mjs ./
 COPY gemini-mcp-client.mjs ./
 COPY mcp-server.mjs ./
 COPY notifications.mjs ./
