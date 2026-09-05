@@ -113,17 +113,6 @@ Set the following environment variables
 | `VITE_API_URL` | `https://your-api.onrender.com/api` |
 | `VITE_API_TOKEN` | The same secret value configured as `API_TOKEN` on Render |
 
-`VITE_API_TOKEN` is embedded into the frontend build, so it is not a true
-secret. It is convenient for automatic authentication, but anyone who can
-inspect the public JavaScript bundle may find it. For stronger protection,
-leave it unset and open the dashboard with `?token=YOUR_TOKEN`; the dashboard
-stores that token only in the current browser session and sends it in the API
-Authorization header.
-
-=======
->>>>>>> e97351f859b6018150e3e6f9a4dcf6e77ad59ec7
-## Step 4: Backend Deployment (Render)
-
 ### 4.1 Create Render Account
 
 1. Go to [render.com](https://render.com) and sign up
