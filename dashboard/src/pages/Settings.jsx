@@ -5,7 +5,6 @@ import '../styles/Settings.css'
 
 function Settings() {
   const toast = useToast()
-  const [settings, setSettings] = useState({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
@@ -91,7 +90,6 @@ function Settings() {
     try {
       setLoading(true)
       const data = await getSettings()
-      setSettings(data)
 
       // Parse settings into form data
       const parsed = {

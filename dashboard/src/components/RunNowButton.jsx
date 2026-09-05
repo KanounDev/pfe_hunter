@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { triggerPipeline, getPipelineStatus, getPipelineRuns } from '../api/api'
+import { useState, useEffect } from 'react'
+import { triggerPipeline, getPipelineStatus } from '../api/api'
 import '../styles/RunNowButton.css'
 
 function RunNowButton() {
