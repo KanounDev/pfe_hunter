@@ -113,14 +113,17 @@ npm run build
 
 ### 3.2 Deploy to Cloudflare Pages
 
-1. Go to [pages.cloudflare.com](https://pages.cloudflare.com)
-2. Click **Create a project → Connect to Git**
-3. Select your `pfe-hunter` repository
-4. Configure:
-   - **Framework preset:** Vite
+1. Open Cloudflare and go to **Build → Compute → Workers and Pages**.
+2. Click **Create application**.
+3. At the bottom, find **Need to use the legacy Pages workflow?** and click
+   **Continue to Pages**.
+4. Click **Get started** next to **Import an existing Git repository**.
+5. Select your GitHub repository.
+6. Configure the build settings:
+   - **Framework preset:** `Vite`
    - **Build command:** `npm run build`
-   - **Build output directory:** `dist`
-   - **Root directory:** `dashboard`
+   - **Build output directory:** `/dist`
+   - **Path / root directory:** `/dashboard`
 
 ### 3.3 Set Environment Variables
 
@@ -129,7 +132,14 @@ In Cloudflare Pages → Settings → Environment variables:
 | Variable | Value |
 |----------|-------|
 | `VITE_API_URL` | `https://your-api.onrender.com/api` |
-| `VITE_API_TOKEN` | Optional local-development fallback; production access uses `?token=YOUR_TOKEN` |
+| `VITE_API_TOKEN` | The same secret value configured as `API_TOKEN` on Render |
+
+`VITE_API_TOKEN` is embedded into the frontend build, so it is not a true
+secret. It is convenient for automatic authentication, but anyone who can
+inspect the public JavaScript bundle may find it. For stronger protection,
+leave it unset and open the dashboard with `?token=YOUR_TOKEN`; the dashboard
+stores that token only in the current browser session and sends it in the API
+Authorization header.
 
 ## Step 4: Backend Deployment (Render)
 
