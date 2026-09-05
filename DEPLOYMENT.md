@@ -23,7 +23,7 @@ Complete guide to deploy PFE Hunter using 100% free tools.
 1. Go to [supabase.com](https://supabase.com) and create a free account
 2. Create a new project
 3. Go to **Connect**
-4. Select **Transaction pooler** as the Connection Method 
+4. Select **Transaction pooler** as the Connection Method
 5. Copy the **Connection string** (URI format)
 6. Add `?sslmode=require` to the end:
    ```
@@ -36,18 +36,39 @@ Complete guide to deploy PFE Hunter using 100% free tools.
 
 ## Step 2: GitHub Repository Setup
 
-### 2.1 Initialize Git
+### 2.1 Clone the project
+
+Clone the repository into a local folder. The cloned project already contains
+its Git history, so you do not need to run `git init`.
+
 ```bash
-cd C:\pfe_hunter
-git init
-git add .
-git commit -m "Initial commit"
+git clone https://github.com/KanounDev/pfe_hunter.git
+cd pfe_hunter
 ```
 
-### 2.2 Create GitHub Repository
+### 2.2 Create your own GitHub repository (optional)
+
+If you want to maintain your own copy and GitHub Actions workflows, create a
+new empty repository first, then point the cloned project to it:
+
 ```bash
-gh repo create pfe-hunter --public --source=. --push
+gh auth login
+gh repo create my-pfe-hunter --public --source=. --remote=origin --push
 ```
+
+Replace `my-pfe-hunter` with your preferred repository name. The `--push`
+option uploads the cloned project to your new repository. If you only want to
+use the original repository, skip this step.
+
+Before pushing, verify that local environment files are not tracked:
+
+```bash
+git status
+git check-ignore .env dashboard/.env
+```
+
+Never commit API keys, database passwords, service-role keys, webhook URLs, or
+CV files. Configure your own values as GitHub Actions secrets in the next step.
 
 ### 2.3 Add Required Secrets
 
