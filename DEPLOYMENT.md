@@ -104,11 +104,8 @@ npm run build
    - **Build command:** `npm run build`
    - **Build output directory:** `/dist`
    - **Path / root directory:** `/dashboard`
-
-<<<<<<< HEAD
-### 3.3 Set Environment Variables
-
-In Cloudflare Pages → Settings → Environment variables:
+7. Set Environment Variables
+Set the following environment variables
 
 | Variable | Value |
 |----------|-------|
