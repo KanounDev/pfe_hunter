@@ -18,7 +18,7 @@
 // from scripts that run without Supabase configured (e.g. GitHub Actions).
 
 import 'dotenv/config';
-import { createClient } from '@supabase/supabase-js';
+import { StorageClient } from '@supabase/storage-js';
 import { unlink } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -37,10 +37,15 @@ export function isSupabaseConfigured() {
 }
 
 /**
- * Lazily creates (and caches) the Supabase client using the service role key.
+ * Lazily creates (and caches) the Supabase Storage client using the service
+ * role key. Deliberately uses @supabase/storage-js (Storage-only client) and
+ * NOT the full @supabase/supabase-js: the full client eagerly initializes its
+ * Realtime (WebSocket) sub-client, which throws on Node < 22
+ * ("native WebSocket not found") — we only need Storage, which is pure HTTP.
+ *
  * The service key bypasses RLS — it must NEVER be exposed to the frontend.
  *
- * @returns {SupabaseClient}
+ * @returns {StorageClient}
  * @throws {Error} if SUPABASE_URL / SUPABASE_SERVICE_KEY are not configured
  */
 export function getSupabaseClient() {
@@ -50,8 +55,9 @@ export function getSupabaseClient() {
         );
     }
     if (!client) {
-        client = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
-            auth: { persistSession: false },
+        client = new StorageClient(SUPABASE_URL, {
+            apikey: SUPABASE_SERVICE_KEY,
+            Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
         });
     }
     return client;
@@ -70,8 +76,8 @@ export async function ensureCvBucket() {
     }
 
     try {
-        const supabase = getSupabaseClient();
-        const { error } = await supabase.storage.createBucket(CV_BUCKET, {
+        const storage = getSupabaseClient();
+        const { error } = await storage.createBucket(CV_BUCKET, {
             public: true,
             fileSizeLimit: 10 * 1024 * 1024, // 10MB, mirrors the API-side limit
         });
@@ -95,9 +101,9 @@ export async function ensureCvBucket() {
  * @returns {Promise<string>} public URL of the uploaded object
  */
 export async function uploadCvToStorage(buffer, storedName, mimeType = 'application/pdf') {
-    const supabase = getSupabaseClient();
+    const storage = getSupabaseClient();
 
-    const { error } = await supabase.storage
+    const { error } = await storage
         .from(CV_BUCKET)
         .upload(storedName, buffer, {
             contentType: mimeType,
@@ -108,11 +114,13 @@ export async function uploadCvToStorage(buffer, storedName, mimeType = 'applicat
         throw new Error(`Supabase upload failed: ${error.message}`);
     }
 
-    const { data } = supabase.storage.from(CV_BUCKET).getPublicUrl(storedName);
-    if (!data?.publicUrl) {
+    const { data } = storage.from(CV_BUCKET).getPublicUrl(storedName);
+    // storage-js versions differ on the property name (publicUrl vs publicURL).
+    const publicUrl = data?.publicUrl ?? data?.publicURL;
+    if (!publicUrl) {
         throw new Error('Supabase upload succeeded but no public URL was returned.');
     }
-    return data.publicUrl;
+    return publicUrl;
 }
 
 /**
@@ -136,8 +144,8 @@ export async function deleteCvFile(fileRef) {
         const objectName = fileRef.slice(markerIndex + marker.length).split('?')[0];
         if (!objectName) return { deleted: false, kind: 'none' };
 
-        const supabase = getSupabaseClient();
-        const { error } = await supabase.storage.from(CV_BUCKET).remove([objectName]);
+        const storage = getSupabaseClient();
+        const { error } = await storage.from(CV_BUCKET).remove([objectName]);
         if (error) {
             throw new Error(`Supabase delete failed: ${error.message}`);
         }

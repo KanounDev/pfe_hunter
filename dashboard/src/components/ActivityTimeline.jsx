@@ -11,7 +11,13 @@ function ActivityTimeline({ runs }) {
           <div className="activity-content">
             <div className="activity-title">
               {run.status === 'success' ? (
-                <>Scraped {run.inserted} posting(s), scored {run.scored}</>
+                run.inserted > 0 ? (
+                  <>Scraped {run.inserted} posting(s), scored {run.scored}</>
+                ) : run.scored > 0 ? (
+                  <>Scored {run.scored} posting(s)</>
+                ) : (
+                  <>No new postings found</>
+                )
               ) : (
                 <>Pipeline failed: {run.step}</>
               )}

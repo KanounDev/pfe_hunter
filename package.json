@@ -24,7 +24,7 @@
   "dependencies": {
     "@google/genai": "^2.18.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@supabase/supabase-js": "^2.115.0",
+    "@supabase/storage-js": "^2.115.0",
     "apify-client": "^2.25.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",

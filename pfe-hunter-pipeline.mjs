@@ -25,7 +25,7 @@
 
 import 'dotenv/config';
 import { existsSync } from 'node:fs';
-import { ensureSchema, getUnscoredPostings, saveScores, closePool, getSetting, getActiveCvPath } from './db.mjs';
+import { ensureSchema, getUnscoredPostings, saveScores, closePool, getSetting, getActiveCvPath, pool } from './db.mjs';
 import { scorePostingsBatch, initialize as initScoring, cleanup as cleanupScoring } from './gemini-scoring.mjs';
 import { notifyViaMcp } from './gemini-mcp-client.mjs';
 import { sendPipelineFailureAlert } from './notifications.mjs';
@@ -98,12 +98,51 @@ async function notify(scored) {
 
 // ---------- 4. RUN ----------
 
+// ---------- PIPELINE RUN TRACKING ----------
+// The dashboard activity timeline reads from pipeline_runs. Runs spawned by
+// api.mjs are recorded by the API itself (PIPELINE_RUN_ID is passed in the
+// child env). Standalone runs — the GitHub Actions cron and manual CLI
+// invocations — must record themselves, or the timeline shows "No activity
+// yet" even though jobs are being collected and scored.
+function isApiSpawned() {
+    return Boolean(process.env.PIPELINE_RUN_ID);
+}
+
+async function startRunRecord() {
+    if (isApiSpawned()) return null; // API owns the record — don't duplicate
+    const { rows } = await pool.query(
+        `INSERT INTO pipeline_runs (status, step, started_at)
+         VALUES ('running', 'scoring', now())
+         RETURNING id`
+    );
+    return rows[0].id;
+}
+
+async function finishRunRecord(runId, { status, step, error_message = null, postings_found = 0, postings_inserted = 0, postings_scored = 0 }) {
+    if (!runId) return;
+    try {
+        await pool.query(
+            `UPDATE pipeline_runs
+             SET status = $2, step = $3, error_message = $4,
+                 postings_found = $5, postings_inserted = $6, postings_scored = $7,
+                 finished_at = now(),
+                 elapsed_seconds = EXTRACT(EPOCH FROM (now() - started_at))
+             WHERE id = $1`, [runId, status, step, error_message, postings_found, postings_inserted, postings_scored]
+        );
+    } catch (err) {
+        // Recording must never break the actual pipeline.
+        console.warn('Failed to record pipeline run:', err.message);
+    }
+}
+
 async function main() {
     let step = 'schema';
+    let runId = null;
 
     try {
         await ensureSchema();
 
+        runId = await startRunRecord();
         step = 'cv-upload';
         // CV resolution order: CV_FILE_PATH env var (set in CI) →
         // CV_SUPABASE_URL env var (set by api.mjs when it spawns this
@@ -131,6 +170,7 @@ async function main() {
 
         if (postings.length === 0) {
             console.log('No unscored postings found — nothing to do this run.');
+            await finishRunRecord(runId, { status: 'success', step: 'completed', postings_found: 0 });
             return;
         }
 
@@ -140,9 +180,29 @@ async function main() {
         step = 'mcp-notify';
         await notify(scored);
 
+        // postings_inserted: jobs the run's scraper added (created after the
+        // run record started). For standalone CI runs the scraper finishes
+        // moments before, so this is usually 0 — the timeline wording handles
+        // that ("Scored N posting(s)").
+        if (runId) {
+            const { rows: countRows } = await pool.query(
+                `SELECT (SELECT COUNT(*) FROM job_postings
+                         WHERE created_at > (SELECT started_at FROM pipeline_runs WHERE id = $1)
+                        ) AS inserted`, [runId]
+            );
+            await finishRunRecord(runId, {
+                status: 'success',
+                step: 'completed',
+                postings_found: postings.length,
+                postings_inserted: parseInt(countRows[0].inserted, 10) || 0,
+                postings_scored: scored.length,
+            });
+        }
+
         console.log('\n✅ Pipeline run complete.');
     } catch (err) {
         console.error(`Pipeline failed at step "${step}":`, err);
+        await finishRunRecord(runId, { status: 'failed', step, error_message: err.message });
         await sendPipelineFailureAlert(step, err).catch((alertErr) =>
             console.error('Also failed to send the pipeline-failure alert itself:', alertErr)
         );

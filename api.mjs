@@ -535,6 +535,7 @@ app.get('/api/runs', async(req, res) => {
             id: row.id,
             status: row.status,
             step: row.step,
+            found: row.postings_found || 0,
             inserted: row.postings_inserted || 0,
             scored: row.postings_scored || 0,
             timestamp: row.started_at,
@@ -1254,7 +1255,9 @@ async function executePipeline(runId) {
         const pipelineProcess = spawn('node', ['pfe-hunter-pipeline.mjs'], {
             cwd: __dirname,
             stdio: 'pipe',
-            env: { ...process.env, ...cvEnv }
+            // PIPELINE_RUN_ID tells the child that THIS run record already
+            // exists (created above) so it won't insert a duplicate one.
+            env: { ...process.env, ...cvEnv, PIPELINE_RUN_ID: String(runId) }
         });
 
         let pipelineOutput = '';
