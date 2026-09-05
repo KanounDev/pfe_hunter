@@ -82,26 +82,6 @@ Go to **Settings → Secrets and variables → Actions** and add:
 | `SUPABASE_SERVICE_KEY` | Supabase service-role key used by GitHub Actions to download the active CV from Storage |
 | `API_TOKEN` | Token for API authentication |
 
-### 2.4 Encode CV as Base64
-
-**On Windows (PowerShell):**
-```powershell
-$bytes = [System.IO.File]::ReadAllBytes("C:\Users\khale\Downloads\test_apify_gemini\CV_mohamed_kanoun_ai_fullstack.pdf")
-$base64 = [System.Convert]::ToBase64String($bytes)
-$base64 | Out-File -Encoding utf8 cv_base64.txt
-```
-
-If the output is larger than 48KB, split it:
-```powershell
-$content = Get-Content cv_base64.txt -Raw
-$chunk1 = $content.Substring(0, 30000)
-$chunk2 = $content.Substring(30000)
-$chunk1 | Out-File cv_chunk1.txt
-$chunk2 | Out-File cv_chunk2.txt
-```
-
-Then create secrets `CV_CONTENT_BASE64_PART1` and `CV_CONTENT_BASE64_PART2`.
-
 ## Step 3: Frontend Deployment (Cloudflare Pages)
 
 ### 3.1 Build the Dashboard
