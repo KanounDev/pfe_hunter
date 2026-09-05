@@ -17,7 +17,7 @@ on:
   schedule:
     # GitHub cron is only a polling trigger. The actual interval is read from
     # user_settings.scrape_interval_minutes in Supabase below.
-    - cron: '*/5 * * * *'
+    - cron: '0 * * * *'
   workflow_dispatch:
     # Allow manual trigger from GitHub Actions tab
 
