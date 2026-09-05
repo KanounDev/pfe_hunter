@@ -61,9 +61,6 @@ Go to **Settings → Secrets and variables → Actions** and add:
 | `SUPABASE_SERVICE_KEY` | Supabase service-role key used by GitHub Actions to download the active CV from Storage |
 | `API_TOKEN` | Token for API authentication |
 
-`CV_CONTENT_BASE64` is no longer required. The pipeline reads the active CV metadata
-from Postgres and downloads the CV from Supabase Storage instead.
-
 ### 2.4 Encode CV as Base64
 
 **On Windows (PowerShell):**
