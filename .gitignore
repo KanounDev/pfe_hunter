@@ -18,6 +18,7 @@ uploads/
 *.log
 scrape_run_log.json
 periodic_run_log.json
+jobteaser_debug_*.html
 npm-debug.log*
 
 # OS files
