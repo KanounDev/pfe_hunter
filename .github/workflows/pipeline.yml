@@ -61,7 +61,11 @@ jobs:
           import fs from 'node:fs';
 
           (async () => {
-            const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+            // pg lets sslmode in the URL override this ssl object. Remove it so
+            // the workflow uses TLS without certificate-chain verification.
+            const databaseUrl = new URL(process.env.DATABASE_URL);
+            databaseUrl.searchParams.delete('sslmode');
+            const client = new Client({ connectionString: databaseUrl.toString(), ssl: { rejectUnauthorized: false } });
             await client.connect();
             const settings = await client.query(
               "SELECT setting_value FROM user_settings WHERE setting_key = 'scrape_interval_minutes'"
@@ -98,7 +102,9 @@ jobs:
           import('dotenv/config');
           import('${{ github.workspace }}/supabase-storage.mjs').then(async ({ downloadCvFromStorage }) => {
             const pg = await import('pg');
-            const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+            const databaseUrl = new URL(process.env.DATABASE_URL);
+            databaseUrl.searchParams.delete('sslmode');
+            const pool = new pg.Pool({ connectionString: databaseUrl.toString(), ssl: { rejectUnauthorized: false } });
 
             // Get the active CV URL from database
             const { rows } = await pool.query(\`
