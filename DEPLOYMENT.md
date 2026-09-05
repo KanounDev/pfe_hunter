@@ -102,15 +102,6 @@ npm run build
    - **Build output directory:** `dist`
    - **Root directory:** `dashboard`
 
-### 3.3 Set Environment Variables
-
-In Cloudflare Pages → Settings → Environment variables:
-
-| Variable | Value |
-|----------|-------|
-| `VITE_API_URL` | `https://your-api.onrender.com/api` |
-| `VITE_API_TOKEN` | Optional local-development fallback; production access uses `?token=YOUR_TOKEN` |
-
 ## Step 4: Backend Deployment (Render)
 
 ### 4.1 Create Render Account
