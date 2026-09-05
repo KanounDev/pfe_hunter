@@ -12,6 +12,18 @@
 //   DISCORD_WEBHOOK_URL  - a channel webhook URL from Discord "Integrations"
 
 import 'dotenv/config';
+import { getSetting } from './db.mjs';
+
+async function getDiscordWebhookUrl() {
+    if (process.env.DISCORD_WEBHOOK_URL) return process.env.DISCORD_WEBHOOK_URL;
+
+    try {
+        return await getSetting('discord_webhook_url', '');
+    } catch (err) {
+        console.warn('Could not read Discord webhook URL from database:', err.message);
+        return '';
+    }
+}
 
 /**
  * Turn a list of scored postings into the digest text the user actually
@@ -60,7 +72,7 @@ async function sendTelegramMessage(text) {
 }
 
 async function sendDiscordMessage(text) {
-    const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+    const webhookUrl = await getDiscordWebhookUrl();
     if (!webhookUrl) return null;
 
     // Discord caps a single message at 2000 chars — split long digests into
@@ -100,7 +112,7 @@ export async function sendDigestAlert(postings) {
     // err?.message can theoretically be empty (see mcp-server.mjs's empty
     // {"text":""} incident) — fall back through code → String() so the
     // reported error is never blank.
-    const describe = (err) => err?.message || err?.code || String(err) || 'unknown send error';
+    const describe = (err) => (err && err.message) || (err && err.code) || String(err) || 'unknown send error';
     const attempts = (await Promise.all([
         sendTelegramMessage(text).catch((err) => ({ channel: 'telegram', ok: false, error: describe(err) })),
         sendDiscordMessage(text).catch((err) => ({ channel: 'discord', ok: false, error: describe(err) })),

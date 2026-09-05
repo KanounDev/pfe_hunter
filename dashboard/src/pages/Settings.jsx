@@ -13,16 +13,16 @@ function Settings() {
   const [originalSettings, setOriginalSettings] = useState({})
 
   // Form state for each setting
-  // NOTE: scrape_interval_minutes was removed — the pipeline schedule is
-  // controlled solely by the GitHub Actions cron (see the Scheduling note).
   const [formData, setFormData] = useState({
+    scrape_interval_minutes: 300,
     results_wanted: 10,
     hours_old: 336,
     fit_score_threshold: 70,
     search_terms: [],
     locations: [],
     job_sites: [],
-    title_keywords: []
+    title_keywords: [],
+    discord_webhook_url: ''
   })
 
   // Temporary input state for arrays
@@ -95,13 +95,15 @@ function Settings() {
 
       // Parse settings into form data
       const parsed = {
+        scrape_interval_minutes: parseInt(data.scrape_interval_minutes?.value || 300),
         results_wanted: parseInt(data.results_wanted?.value || 10),
         hours_old: parseInt(data.hours_old?.value || 336),
         fit_score_threshold: parseInt(data.fit_score_threshold?.value || 70),
         search_terms: JSON.parse(data.search_terms?.value || '[]'),
         locations: JSON.parse(data.locations?.value || '[]'),
         job_sites: JSON.parse(data.job_sites?.value || '[]'),
-        title_keywords: JSON.parse(data.title_keywords?.value || '[]')
+        title_keywords: JSON.parse(data.title_keywords?.value || '[]'),
+        discord_webhook_url: data.discord_webhook_url?.value || ''
       }
 
       setFormData(parsed)
@@ -144,6 +146,10 @@ function Settings() {
       errors.push('Hours old must be between 1 and 336')
     }
 
+    if (formData.scrape_interval_minutes < 5 || formData.scrape_interval_minutes > 10080) {
+      errors.push('Pipeline interval must be between 5 minutes and 7 days')
+    }
+
     if (formData.fit_score_threshold < 0 || formData.fit_score_threshold > 100) {
       errors.push('Fit score threshold must be between 0 and 100')
     }
@@ -158,6 +164,17 @@ function Settings() {
 
     if (formData.job_sites.length === 0) {
       errors.push('At least one job site must be selected')
+    }
+
+    if (formData.discord_webhook_url) {
+      try {
+        const webhook = new URL(formData.discord_webhook_url)
+        if (webhook.protocol !== 'https:' || webhook.hostname !== 'discord.com') {
+          errors.push('Discord webhook URL must be an HTTPS discord.com URL')
+        }
+      } catch {
+        errors.push('Discord webhook URL must be valid')
+      }
     }
 
     return errors
@@ -176,13 +193,15 @@ function Settings() {
 
       const payload = {
         settings: {
+          scrape_interval_minutes: formData.scrape_interval_minutes.toString(),
           results_wanted: formData.results_wanted.toString(),
           hours_old: formData.hours_old.toString(),
           fit_score_threshold: formData.fit_score_threshold.toString(),
           search_terms: JSON.stringify(formData.search_terms),
           locations: JSON.stringify(formData.locations),
           job_sites: JSON.stringify(formData.job_sites),
-          title_keywords: JSON.stringify(formData.title_keywords)
+          title_keywords: JSON.stringify(formData.title_keywords),
+          discord_webhook_url: formData.discord_webhook_url.trim()
         }
       }
 
@@ -257,14 +276,30 @@ function Settings() {
           <div className="setting-info-box">
             <h3>⏰ Scheduling</h3>
             <p>
-              The pipeline runs automatically <strong>every 5 hours</strong> via GitHub Actions
-              (cron <code>0 */5 * * *</code>). There is nothing to configure here — the
-              schedule lives in <code>.github/workflows/pipeline.yml</code>.
+              GitHub Actions checks for work every 5 minutes. The pipeline runs when this
+              interval has elapsed since the previous run.
             </p>
             <p>
               Need results sooner? Use the <strong>▶️ Run Now</strong> button on the Dashboard
               to trigger a manual run.
             </p>
+          </div>
+
+          <div className="setting-item">
+            <label htmlFor="scrape_interval_minutes">
+              Pipeline Interval
+              <span className="setting-description">Minimum time between automatic pipeline runs</span>
+            </label>
+            <input
+              id="scrape_interval_minutes"
+              type="number"
+              min="5"
+              max="10080"
+              value={formData.scrape_interval_minutes}
+              onChange={(e) => handleChange('scrape_interval_minutes', parseInt(e.target.value) || 5)}
+              className="setting-input"
+            />
+            <span className="setting-hint">5 minutes to 7 days. The workflow polls every 5 minutes.</span>
           </div>
 
           <div className="setting-item">
@@ -299,6 +334,27 @@ function Settings() {
               className="setting-input"
             />
             <span className="setting-hint">Max: 336 (14 days)</span>
+          </div>
+        </section>
+
+        {/* Notifications Configuration */}
+        <section className="settings-section">
+          <h2>🔔 Notifications</h2>
+
+          <div className="setting-item">
+            <label htmlFor="discord_webhook_url">
+              Discord Webhook URL
+              <span className="setting-description">Used by the pipeline to send matching-job and failure alerts</span>
+            </label>
+            <input
+              id="discord_webhook_url"
+              type="url"
+              placeholder="https://discord.com/api/webhooks/..."
+              value={formData.discord_webhook_url}
+              onChange={(e) => handleChange('discord_webhook_url', e.target.value)}
+              className="setting-input"
+            />
+            <span className="setting-hint">Leave empty to disable Discord notifications. Saved securely in the database.</span>
           </div>
         </section>
 

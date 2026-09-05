@@ -54,7 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_user_settings_key ON user_settings (setting_key);
 -- Default settings
 INSERT INTO user_settings (setting_key, setting_value, description) VALUES
     -- Scrape configuration
-    ('scrape_interval_minutes', '300', 'DEPRECATED (unused): the schedule is controlled solely by the GitHub Actions cron (0 */5 * * * = every 5 hours)'),
+    ('scrape_interval_minutes', '300', 'Minimum minutes between automatic pipeline runs. GitHub Actions checks this value every 5 minutes.'),
     ('results_wanted', '10', 'Number of job postings to fetch per source. Max: 50'),
     ('hours_old', '336', 'Only fetch jobs posted within this many hours'),
 
@@ -66,6 +66,7 @@ INSERT INTO user_settings (setting_key, setting_value, description) VALUES
 
     -- Scoring configuration
     ('fit_score_threshold', '70', 'Minimum fit score to trigger Discord notification (0-100)'),
+    ('discord_webhook_url', '', 'Discord webhook URL for job and pipeline notifications. Leave empty to disable Discord.'),
 
     -- Rate limiting info (read-only, for display)
     ('gemini_rpd_limit', '1000', 'Gemini API requests per day limit (free tier: 100-1000)')

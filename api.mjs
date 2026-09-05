@@ -123,9 +123,10 @@ app.use(cors(corsOptions));
 const accessLogMode = (process.env.ACCESS_LOG || 'compact').toLowerCase();
 if (accessLogMode !== 'off') {
     app.use(morgan('combined', {
-        skip: accessLogMode === 'all'
-            ? () => false // log everything
-            : (req, res) => req.method === 'GET' && res.statusCode < 400,
+        skip: accessLogMode === 'all' ?
+            () => false // log everything
+            :
+            (req, res) => req.method === 'GET' && res.statusCode < 400,
     }));
 }
 
@@ -150,7 +151,8 @@ function safeTokenCompare(provided, expected) {
 
 function extractRequestToken(req) {
     const header = req.headers.authorization || '';
-    const headerToken = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim();
+    const headerMatch = /^Bearer\s+(.+)$/i.exec(header);
+    const headerToken = headerMatch && headerMatch[1] ? headerMatch[1].trim() : null;
     const queryToken = typeof req.query.token === 'string' ? req.query.token.trim() : null;
     return headerToken || queryToken || null;
 }
@@ -165,7 +167,7 @@ function authMiddleware(req, res, next) {
     }
 
     const token = extractRequestToken(req);
-    const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
+    const clientIp = req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
 
     if (!token) {
         console.warn(`[Auth] DENIED (no token) ${req.method} ${req.originalUrl} from ${clientIp}`);
@@ -257,9 +259,9 @@ const jobIdParamSchema = z.object({
     id: z.string().trim().min(1).max(200),
 }).strict();
 
-// Setting keys that may be written. scrape_interval_minutes was removed —
-// the schedule is controlled solely by the GitHub Actions cron.
+// Setting keys that may be written from the authenticated dashboard.
 const SETTING_KEYS = [
+    'scrape_interval_minutes',
     'results_wanted',
     'hours_old',
     'search_terms',
@@ -267,6 +269,7 @@ const SETTING_KEYS = [
     'job_sites',
     'title_keywords',
     'fit_score_threshold',
+    'discord_webhook_url',
 ];
 
 const settingKeyParamSchema = z.object({
@@ -397,8 +400,8 @@ app.get('/api/postings', async(req, res) => {
         sql += ` ORDER BY ${sortField} ${sortOrder}`;
 
         // Pagination (validated + clamped by zod: limit 1-100, offset >= 0)
-        const limitVal = limit ?? 100;
-        const offsetVal = offset ?? 0;
+        const limitVal = limit !== undefined && limit !== null ? limit : 100;
+        const offsetVal = offset !== undefined && offset !== null ? offset : 0;
         sql += ` LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
         params.push(limitVal, offsetVal);
 
@@ -520,7 +523,7 @@ app.get('/api/runs', async(req, res) => {
         const query = validate(limitQuerySchema, sanitizedQuery(req), res, 'query parameters');
         if (query === null) return;
 
-        const limitVal = query.limit ?? 10;
+        const limitVal = query.limit !== undefined && query.limit !== null ? query.limit : 10;
 
         const { rows } = await pool.query(
             `SELECT id, status, step, postings_found, postings_inserted, postings_scored,
@@ -730,6 +733,7 @@ app.put('/api/settings', authMiddleware, async(req, res) => {
 app.post('/api/settings/reset', authMiddleware, async(req, res) => {
     try {
         const defaults = {
+            scrape_interval_minutes: '300',
             results_wanted: '10',
             hours_old: '336',
             search_terms: '["software engineering internship"]',
@@ -737,6 +741,7 @@ app.post('/api/settings/reset', authMiddleware, async(req, res) => {
             job_sites: '["linkedin", "indeed", "jobteaser"]',
             title_keywords: '["software", "developer", "backend", "frontend", "fullstack", "full-stack", "engineer", "data", "ai", "machine learning", "intern", "stage"]',
             fit_score_threshold: '70',
+            discord_webhook_url: '',
         };
 
         const client = await pool.connect();
@@ -772,8 +777,14 @@ app.post('/api/settings/reset', authMiddleware, async(req, res) => {
 
 function validateSetting(key, value) {
     switch (key) {
-        // NOTE: scrape_interval_minutes was removed — the pipeline schedule
-        // is controlled solely by the GitHub Actions cron (0 */5 * * *).
+        case 'scrape_interval_minutes':
+            {
+                const interval = Number(value);
+                if (!Number.isInteger(interval) || interval < 5 || interval > 10080) {
+                    return 'scrape_interval_minutes must be an integer between 5 and 10080';
+                }
+                break;
+            }
 
         case 'results_wanted':
             const results = parseInt(value);
@@ -814,6 +825,18 @@ function validateSetting(key, value) {
                 }
             } catch (e) {
                 return `${key} must be valid JSON`;
+            }
+            break;
+
+        case 'discord_webhook_url':
+            if (value === '') break;
+            try {
+                const webhook = new URL(value);
+                if (webhook.protocol !== 'https:' || webhook.hostname !== 'discord.com') {
+                    return 'discord_webhook_url must be an HTTPS Discord webhook URL';
+                }
+            } catch (e) {
+                return 'discord_webhook_url must be a valid HTTPS Discord webhook URL';
             }
             break;
     }
@@ -1146,7 +1169,7 @@ app.get('/api/pipeline/runs', async(req, res) => {
         const query = validate(limitQuerySchema, sanitizedQuery(req), res, 'query parameters');
         if (query === null) return;
 
-        const limitVal = query.limit ?? 20;
+        const limitVal = query.limit !== undefined && query.limit !== null ? query.limit : 20;
 
         const { rows } = await pool.query(
             `SELECT id, status, step, postings_found, postings_inserted, postings_scored,
@@ -1257,7 +1280,7 @@ async function executePipeline(runId) {
             stdio: 'pipe',
             // PIPELINE_RUN_ID tells the child that THIS run record already
             // exists (created above) so it won't insert a duplicate one.
-            env: { ...process.env, ...cvEnv, PIPELINE_RUN_ID: String(runId) }
+            env: {...process.env, ...cvEnv, PIPELINE_RUN_ID: String(runId) }
         });
 
         let pipelineOutput = '';

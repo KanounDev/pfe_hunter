@@ -56,7 +56,6 @@ Go to **Settings → Secrets and variables → Actions** and add:
 |--------|-------------|
 | `DATABASE_URL` | Supabase connection string (with `?sslmode=require`) |
 | `GEMINI_API_KEY` | Your Google Gemini API key |
-| `DISCORD_WEBHOOK_URL` | Discord webhook URL (optional) |
 | `CV_CONTENT_BASE64` | Your CV file encoded as base64 |
 | `API_TOKEN` | Token for API authentication |
 
@@ -107,7 +106,7 @@ In Cloudflare Pages → Settings → Environment variables:
 | Variable | Value |
 |----------|-------|
 | `VITE_API_URL` | `https://your-api.onrender.com/api` |
-| `VITE_API_TOKEN` | Your API token (same as `API_TOKEN` secret) |
+| `VITE_API_TOKEN` | Optional local-development fallback; production access uses `?token=YOUR_TOKEN` |
 
 ## Step 4: Backend Deployment (Render)
 
@@ -139,6 +138,20 @@ In Cloudflare Pages → Settings → Environment variables:
 | `DISCORD_WEBHOOK_URL` | Your Discord webhook (optional) |
 | `NODE_ENV` | `production` |
 
+The automatic run interval and Discord webhook are configured from the dashboard's
+Settings page and stored in Supabase (`scrape_interval_minutes` and
+`discord_webhook_url`). GitHub Actions polls every 5 minutes and only runs when
+the configured interval has elapsed. Manual `workflow_dispatch` runs bypass the
+interval check.
+
+### 4.4 Pipeline secrets explained
+
+| Secret | Role |
+|--------|------|
+| `SUPABASE_URL` | Supabase project URL used by the Storage client to access the `cvs` bucket. |
+| `SUPABASE_SERVICE_KEY` | Server-side Supabase service-role key used to download the active CV from Storage. Never expose it in the dashboard or frontend. |
+| `DATABASE_URL` | Supabase Postgres connection string used to find the active CV, read settings, scrape configuration, postings, and pipeline history. |
+
 ## Step 5: Test the Deployment
 
 ### 5.1 Check API Health
@@ -149,7 +162,17 @@ curl https://your-api.onrender.com/api/health
 Should return: `{"status":"ok","database":"connected"}`
 
 ### 5.2 Check Frontend
-Visit `https://your-app.pages.dev` - you should see the dashboard.
+Visit `https://your-app.pages.dev/?token=YOUR_API_TOKEN` to authenticate and open the dashboard. The token is retained for the current browser session while navigating between dashboard pages.
+
+To create the API token, generate a long random value locally, set it as
+`API_TOKEN` in Render's environment variables, then use the same value in the
+dashboard URL. For example in PowerShell:
+
+```powershell
+$token = [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 } | ForEach-Object { [byte]$_ }))
+```
+
+Do not commit the token or place it in a public repository.
 
 ### 5.3 Trigger Manual Pipeline
 1. Go to your GitHub repository

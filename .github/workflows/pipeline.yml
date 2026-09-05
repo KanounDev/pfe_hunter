@@ -2,13 +2,12 @@
 # Runs PFE Hunter scraper + scoring pipeline on a schedule (free GitHub Actions)
 #
 # TRIGGERS:
-#   - schedule: Every 6 hours (0 */6 * * *)
+#   - schedule: Every 5 minutes; the database setting controls whether a run is due
 #   - workflow_dispatch: Manual trigger from Actions tab
 #
 # SECRETS REQUIRED (Settings → Secrets and variables → Actions):
 #   - DATABASE_URL: Supabase Postgres connection string (with ?sslmode=require)
 #   - GEMINI_API_KEY: Google Gemini API key
-#   - DISCORD_WEBHOOK_URL: Discord webhook for notifications (optional)
 #   - SUPABASE_URL: Supabase project URL (for CV download)
 #   - SUPABASE_SERVICE_KEY: Supabase service role key (for CV download)
 
@@ -16,10 +15,9 @@ name: PFE Hunter Pipeline
 
 on:
   schedule:
-    # Run every 5 hours (at 00:00, 05:00, 10:00, 15:00, 20:00 UTC).
-    # This cron is the ONLY scheduling mechanism — the dashboard has no
-    # interval setting.
-    - cron: '0 */5 * * *'
+    # GitHub cron is only a polling trigger. The actual interval is read from
+    # user_settings.scrape_interval_minutes in Supabase below.
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     # Allow manual trigger from GitHub Actions tab
 
@@ -52,7 +50,44 @@ jobs:
       - name: Install Node.js dependencies
         run: npm ci --only=production
 
+      - name: Check database schedule
+        id: schedule
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { Client } from 'pg';
+          const fs = require('fs');
+
+          (async () => {
+            const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+            await client.connect();
+            const settings = await client.query(
+              "SELECT setting_value FROM user_settings WHERE setting_key = 'scrape_interval_minutes'"
+            );
+            const runs = await client.query(
+              "SELECT started_at FROM pipeline_runs ORDER BY started_at DESC LIMIT 1"
+            );
+            await client.end();
+
+            const intervalMinutes = Number.parseInt(settings.rows[0]?.setting_value || '300', 10);
+            const lastRun = runs.rows[0]?.started_at ? new Date(runs.rows[0].started_at) : null;
+            const due = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch' ||
+              !lastRun || Date.now() - lastRun.getTime() >= intervalMinutes * 60 * 1000;
+
+            console.log(`Configured interval: ${intervalMinutes} minute(s)`);
+            console.log(`Last run: ${lastRun ? lastRun.toISOString() : 'none'}`);
+            console.log(`Pipeline due: ${due}`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `should_run=${due}\n`);
+          })().catch((err) => {
+            console.error('Could not read pipeline schedule from Supabase:', err);
+            process.exit(1);
+          });
+          NODE
+
       - name: Download CV from Supabase
+        if: steps.schedule.outputs.should_run == 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -91,6 +126,7 @@ jobs:
           echo "CV_FILE_PATH=$(pwd)/CV.pdf" >> $GITHUB_ENV
 
       - name: Run scraper
+        if: steps.schedule.outputs.should_run == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NODE_ENV: production
@@ -103,10 +139,10 @@ jobs:
           python scrape_jobspy.py
 
       - name: Run scoring pipeline
+        if: steps.schedule.outputs.should_run == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           CV_FILE_PATH: ${{ env.CV_FILE_PATH }}
           NODE_ENV: production
         run: |
