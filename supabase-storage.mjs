@@ -43,6 +43,12 @@ export function isSupabaseConfigured() {
  * Realtime (WebSocket) sub-client, which throws on Node < 22
  * ("native WebSocket not found") — we only need Storage, which is pure HTTP.
  *
+ * IMPORTANT: unlike supabase-js's createClient() (which takes the bare
+ * project URL), storage-js expects the Storage API URL and appends
+ * "/object/...", "/bucket" etc. to it VERBATIM. SUPABASE_URL is documented as
+ * the bare project URL, so "/storage/v1" is appended here — unless the env
+ * var already includes it.
+ *
  * The service key bypasses RLS — it must NEVER be exposed to the frontend.
  *
  * @returns {StorageClient}
@@ -55,7 +61,9 @@ export function getSupabaseClient() {
         );
     }
     if (!client) {
-        client = new StorageClient(SUPABASE_URL, {
+        const baseUrl = SUPABASE_URL.replace(/\/+$/, '');
+        const storageUrl = /\/storage\/v1$/.test(baseUrl) ? baseUrl : `${baseUrl}/storage/v1`;
+        client = new StorageClient(storageUrl, {
             apikey: SUPABASE_SERVICE_KEY,
             Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
         });
