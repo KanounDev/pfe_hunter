@@ -105,6 +105,7 @@ npm run build
    - **Build output directory:** `/dist`
    - **Path / root directory:** `/dashboard`
 7. Set Environment Variables
+
 Set the following environment variables
 
 | Variable | Value |
