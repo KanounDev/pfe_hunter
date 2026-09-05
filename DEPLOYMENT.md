@@ -115,37 +115,44 @@ Set the following environment variables
 
 ### 4.1 Create Render Account
 
-1. Go to [render.com](https://render.com) and sign up
-2. Connect your GitHub account
+1. Go to [render.com](https://render.com).
+2. Click **Start for free**.
+3. Create an account with GitHub.
 
 ### 4.2 Create Web Service
 
-1. Click **New → Web Service**
-2. Select your `pfe-hunter` repository
+1. Under **Web Services**, click **New Web Service**.
+2. Select your `pfe-hunter` repository.
 3. Configure:
    - **Name:** `pfe-hunter-api`
-   - **Region:** Choose closest to you
+   - **Language:** `Python 3`
+   - **Region:** Choose the region closest to you
    - **Branch:** `main`
-   - **Runtime:** Docker
+   - **Runtime:** `Docker`
    - **Dockerfile Path:** `./Dockerfile.api`
 
 ### 4.3 Set Environment Variables
 
 | Variable | Value |
 |----------|-------|
-| `DATABASE_URL` | Your Supabase connection string |
 | `API_PORT` | `3001` |
+| `API_TOKEN` | Your API token; use the same value for dashboard authentication |
+| `DATABASE_URL` | Your Supabase Postgres connection string |
+| `DISCORD_WEBHOOK_URL` | Optional fallback Discord webhook; normally configure this in the dashboard Settings page |
 | `FRONTEND_URL` | `https://your-app.pages.dev` |
-| `API_TOKEN` | Your API token |
 | `GEMINI_API_KEY` | Your Gemini API key |
-| `DISCORD_WEBHOOK_URL` | Your Discord webhook (optional) |
 | `NODE_ENV` | `production` |
+| `SUPABASE_SERVICE_KEY` | Supabase service-role key used to access CV Storage |
+| `SUPABASE_URL` | Supabase project URL |
 
-The automatic run interval and Discord webhook are configured from the dashboard's
-Settings page and stored in Supabase (`scrape_interval_minutes` and
-`discord_webhook_url`). GitHub Actions polls every 5 minutes and only runs when
-the configured interval has elapsed. Manual `workflow_dispatch` runs bypass the
-interval check.
+The automatic run interval is configured in the dashboard Settings page and
+stored in Supabase as `scrape_interval_minutes`. GitHub Actions checks every
+5 minutes, but the scraper and scoring pipeline run only after the configured
+interval has elapsed. A manual `workflow_dispatch` run bypasses that interval.
+
+The Discord webhook is configured in the dashboard Settings page and stored in
+Supabase as `discord_webhook_url`. `DISCORD_WEBHOOK_URL` is optional on Render
+and is used only as a fallback when the database setting is empty.
 
 ### 4.4 Pipeline secrets explained
 
