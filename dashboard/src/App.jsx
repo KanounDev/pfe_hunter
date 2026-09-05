@@ -7,6 +7,15 @@ import { ThemeProvider } from './context/ThemeContext'
 import './styles/Layout.css'
 
 function App() {
+  const [accessToken, setAccessToken] = useState(() => {
+    const queryToken = new URLSearchParams(window.location.search).get('token')
+    if (queryToken) {
+      sessionStorage.setItem('pfe_api_token', queryToken)
+      return queryToken
+    }
+    return sessionStorage.getItem('pfe_api_token') || ''
+  })
+  const [tokenInput, setTokenInput] = useState('')
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('theme')
     return saved || 'dark'
@@ -19,6 +28,41 @@ function App() {
 
   const toggleTheme = () => {
     setTheme(prev => prev === 'dark' ? 'light' : 'dark')
+  }
+
+  const handleAccess = (event) => {
+    event.preventDefault()
+    const token = tokenInput.trim()
+    if (!token) return
+    sessionStorage.setItem('pfe_api_token', token)
+    setAccessToken(token)
+    setTokenInput('')
+  }
+
+  if (!accessToken) {
+    return (
+      <div className="access-gate">
+        <div className="access-panel">
+          <div className="access-mark">🔍</div>
+          <p className="access-kicker">PFE HUNTER</p>
+          <h1>Private dashboard</h1>
+          <p>Enter your access token to continue.</p>
+          <form onSubmit={handleAccess} className="access-form">
+            <label htmlFor="access-token">Access token</label>
+            <input
+              id="access-token"
+              type="password"
+              value={tokenInput}
+              onChange={(event) => setTokenInput(event.target.value)}
+              placeholder="Paste your API token"
+              autoComplete="off"
+              autoFocus
+            />
+            <button type="submit">Open dashboard</button>
+          </form>
+        </div>
+      </div>
+    )
   }
 
   return (

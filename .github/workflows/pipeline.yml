@@ -58,7 +58,7 @@ jobs:
         run: |
           node --input-type=module <<'NODE'
           import { Client } from 'pg';
-          const fs = require('fs');
+          import fs from 'node:fs';
 
           (async () => {
             const client = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
