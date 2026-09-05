@@ -22,9 +22,10 @@ Complete guide to deploy PFE Hunter using 100% free tools.
 
 1. Go to [supabase.com](https://supabase.com) and create a free account
 2. Create a new project
-3. Go to **Settings → Database**
-4. Copy the **Connection string** (URI format)
-5. Add `?sslmode=require` to the end:
+3. Go to **Connect**
+4. Select **Transaction pooler** as the Connection Method 
+5. Copy the **Connection string** (URI format)
+6. Add `?sslmode=require` to the end:
    ```
    postgres://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?sslmode=require
    ```
@@ -37,7 +38,7 @@ Complete guide to deploy PFE Hunter using 100% free tools.
 
 ### 2.1 Initialize Git
 ```bash
-cd C:\Users\khale\Downloads\test_apify_gemini
+cd C:\pfe_hunter
 git init
 git add .
 git commit -m "Initial commit"
