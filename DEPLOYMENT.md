@@ -38,7 +38,7 @@ Complete guide to deploy PFE Hunter using 100% free tools.
 
 ### 2.1 Initialize Git
 ```bash
-cd C:\Users\khale\Downloads\test_apify_gemini
+cd C:\pfe_hunter
 git init
 git add .
 git commit -m "Initial commit"
