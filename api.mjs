@@ -259,6 +259,10 @@ const jobIdParamSchema = z.object({
     id: z.string().trim().min(1).max(200),
 }).strict();
 
+const appliedBodySchema = z.object({
+    applied: z.boolean(),
+}).strict();
+
 // Setting keys that may be written from the authenticated dashboard.
 const SETTING_KEYS = [
     'scrape_interval_minutes',
@@ -337,6 +341,7 @@ function formatPosting(row) {
         description: row.description,
         fit_score: row.fit_score,
         fit_reasoning: row.fit_reasoning,
+        applied: row.applied === true,
         created_at: formatDate(row.created_at),
         scored_at: formatDate(row.scored_at),
         notified_at: formatDate(row.notified_at),
@@ -431,6 +436,33 @@ app.get('/api/postings/:id', async(req, res) => {
     } catch (err) {
         console.error('Error fetching posting:', err);
         res.status(500).json({ error: 'Failed to fetch posting' });
+    }
+});
+
+// Update whether the user has applied to a posting
+app.put('/api/postings/:id/applied', async(req, res) => {
+    try {
+        const params = validate(jobIdParamSchema, req.params, res, 'path parameters');
+        if (params === null) return;
+
+        const body = validate(appliedBodySchema, req.body, res, 'request body');
+        if (body === null) return;
+
+        const { rows } = await pool.query(
+            `UPDATE job_postings
+             SET applied = $1
+             WHERE job_id = $2
+             RETURNING *`, [body.applied, sanitize(params.id)]
+        );
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: 'Posting not found' });
+        }
+
+        res.json(formatPosting(rows[0]));
+    } catch (err) {
+        console.error('Error updating application status:', err);
+        res.status(500).json({ error: 'Failed to update application status' });
     }
 });
 

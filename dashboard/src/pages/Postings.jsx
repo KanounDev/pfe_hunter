@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { getPostings } from '../api/index.js'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { getPostings, updatePostingApplied } from '../api/index.js'
 import PostingsTable from '../components/PostingsTable'
 import PostingsFilters from '../components/PostingsFilters'
 import JobDetailModal from '../components/JobDetailModal'
@@ -11,6 +11,7 @@ import '../styles/Postings.css'
 const REFETCH_INTERVAL = 30 * 1000
 
 function Postings() {
+  const queryClient = useQueryClient()
   const [filters, setFilters] = useState({
     minScore: 0,
     maxScore: 100,
@@ -20,6 +21,17 @@ function Postings() {
   })
 
   const [selectedJob, setSelectedJob] = useState(null)
+
+  const updateAppliedMutation = useMutation({
+    mutationFn: ({ jobId, applied }) => updatePostingApplied(jobId, applied),
+    onSuccess: (updatedPosting) => {
+      queryClient.setQueryData(['postings', filters], (currentPostings) =>
+        currentPostings?.map((posting) =>
+          posting.job_id === updatedPosting.job_id ? updatedPosting : posting
+        )
+      )
+    },
+  })
 
   const { data: postings, isLoading, error, refetch } = useQuery({
     queryKey: ['postings', filters],
@@ -69,6 +81,9 @@ function Postings() {
         <PostingsTable
           postings={postings}
           onRowClick={setSelectedJob}
+          onAppliedChange={(jobId, applied) =>
+            updateAppliedMutation.mutate({ jobId, applied })
+          }
         />
       ) : (
         <div className="empty-state">

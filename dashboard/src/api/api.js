@@ -87,6 +87,14 @@ export async function getPostingById(id) {
     return apiFetch(`/postings/${id}`);
 }
 
+// Mark a posting as applied or not applied
+export async function updatePostingApplied(id, applied) {
+    return apiFetch(`/postings/${id}/applied`, {
+        method: 'PUT',
+        body: JSON.stringify({ applied }),
+    });
+}
+
 // Get aggregated statistics
 export async function getStats() {
     return apiFetch('/stats');

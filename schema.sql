@@ -26,8 +26,12 @@ CREATE TABLE IF NOT EXISTS job_postings (
     fit_reasoning   TEXT,
     scored_at       TIMESTAMPTZ,
     notified_at     TIMESTAMPTZ,
+    applied         BOOLEAN NOT NULL DEFAULT false,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE job_postings
+    ADD COLUMN IF NOT EXISTS applied BOOLEAN NOT NULL DEFAULT false;
 
 -- Indexes for job_postings
 CREATE INDEX IF NOT EXISTS idx_job_postings_job_id  ON job_postings (job_id);

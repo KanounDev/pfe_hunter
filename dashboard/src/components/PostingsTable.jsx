@@ -1,21 +1,26 @@
-function PostingsTable({ postings, onRowClick }) {
+function PostingsTable({ postings, onRowClick, onAppliedChange }) {
   return (
     <div className="table-container">
       <table className="table">
         <thead>
           <tr>
             <th>Title</th>
+            <th>Link</th>
             <th>Company</th>
             <th>Location</th>
             <th>Fit Score</th>
             <th>Reasoning</th>
             <th>Created</th>
             <th>Status</th>
+            <th>Applied</th>
           </tr>
         </thead>
         <tbody>
           {postings.map((posting) => (
             <tr key={posting.job_id} onClick={() => onRowClick(posting)}>
+              <td>
+                {posting.title}
+              </td>
               <td>
                 <a
                   href={posting.job_url}
@@ -24,7 +29,7 @@ function PostingsTable({ postings, onRowClick }) {
                   className="job-link"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {posting.title}
+                  link
                 </a>
               </td>
               <td>{posting.company || '—'}</td>
@@ -42,6 +47,18 @@ function PostingsTable({ postings, onRowClick }) {
                 ) : (
                   <span className="badge badge-neutral">Pending</span>
                 )}
+              </td>
+              <td>
+                <input
+                  type="checkbox"
+                  checked={posting.applied ?? false}
+                  aria-label={`Mark ${posting.title} as applied`}
+                  onChange={(e) => {
+                    e.stopPropagation()
+                    onAppliedChange(posting.job_id, e.target.checked)
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                />
               </td>
             </tr>
           ))}

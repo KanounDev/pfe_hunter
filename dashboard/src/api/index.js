@@ -5,6 +5,7 @@ import * as api from './api.js';
 
 export const getPostings = api.getPostings;
 export const getPostingById = api.getPostingById;
+export const updatePostingApplied = api.updatePostingApplied;
 export const getStats = api.getStats;
 export const getRuns = api.getRuns;
 export const getScoreDistribution = api.getScoreDistribution;
