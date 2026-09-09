@@ -88,8 +88,13 @@ export function getSupabaseClient() {
  * @returns {Promise<void>}
  */
 export async function ensureCvBucket() {
+    if (isLocalStorageConfigured()) {
+        console.log(`Local CV storage enabled at ${CV_LOCAL_DIR}.`);
+        return;
+    }
+
     if (!isSupabaseConfigured()) {
-        console.warn('Supabase Storage not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY missing) — CV uploads will be unavailable.');
+        console.warn('Supabase Storage not configured (SUPABASE_URL / SUPABASE_SERVICE_KEY missing) — set CV_STORAGE=local for local CV uploads.');
         return;
     }
 
