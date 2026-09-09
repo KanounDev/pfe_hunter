@@ -132,9 +132,10 @@ Set the following environment variables
 2. Select your `pfe-hunter` repository.
 3. Configure:
    - **Name:** `pfe-hunter-api`
-   - **Language:** `Docker`
+   - **Language:** `Python 3`
    - **Region:** Choose the region closest to you
    - **Branch:** `main`
+   - **Runtime:** `Docker`
    - **Dockerfile Path:** `./Dockerfile.api`
 
 ### 4.3 Set Environment Variables
