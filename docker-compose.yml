@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: pfe_hunter_local
       POSTGRES_DB: pfe_hunter
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -25,13 +25,14 @@ services:
       context: .
       dockerfile: Dockerfile.api
     environment:
-      DATABASE_URL: postgres://pfe_hunter:pfe_hunter_local@db:5432/pfe_hunter
+      DATABASE_URL: postgres://pfe_hunter:pfe_hunter_local@db:5432/pfe_hunter?sslmode=disable
       API_PORT: 3001
       FRONTEND_URL: http://localhost:5173
       API_TOKEN: ${API_TOKEN:-local_dev_token}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
-      CV_FILE_PATH: ${CV_FILE_PATH:-./uploads/cvs/cv.pdf}
+      CV_STORAGE: local
+      CV_LOCAL_DIR: /app/uploads/cvs
       NODE_ENV: production
     ports:
       - "3001:3001"
@@ -47,14 +48,17 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     environment:
-      DATABASE_URL: postgres://pfe_hunter:pfe_hunter_local@db:5432/pfe_hunter
+      DATABASE_URL: postgres://pfe_hunter:pfe_hunter_local@db:5432/pfe_hunter?sslmode=disable
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
-      CV_FILE_PATH: ${CV_FILE_PATH:-./uploads/cvs/cv.pdf}
+      CV_STORAGE: local
+      CV_LOCAL_DIR: /app/uploads/cvs
     depends_on:
       db:
         condition: service_healthy
     command: ["python", "run_periodic.py", "--interval", "5"]
+    volumes:
+      - uploads_data:/app/uploads
 
 volumes:
   postgres_data:

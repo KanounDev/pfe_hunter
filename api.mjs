@@ -36,8 +36,10 @@ import Filter from 'xss';
 import { pool, ensureSchema } from './db.mjs';
 import {
     isSupabaseConfigured,
+    isLocalStorageConfigured,
     ensureCvBucket,
     uploadCvToStorage,
+    uploadCvToLocalStorage,
     deleteCvFile,
     downloadCvFromStorage,
 } from './supabase-storage.mjs';
@@ -288,16 +290,14 @@ const singleSettingBodySchema = z.object({
     value: z.string().max(5000),
 }).strict();
 
-// ---------- CV UPLOAD (Supabase Storage) ----------
+// ---------- CV UPLOAD ----------
 // Sanitize filename to prevent path traversal and odd characters.
 const sanitizeFilename = (filename) => {
     return path.basename(filename).replace(/[^a-zA-Z0-9.-]/g, '_');
 };
 
 // Configure multer for CV uploads.
-// Files are held IN MEMORY (never written to disk) and pushed straight to
-// Supabase Storage — Render's disk is ephemeral, so local copies would be
-// lost on redeploy anyway.
+// Files are held in memory until they are written to the selected storage.
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: {
@@ -887,15 +887,17 @@ app.post('/api/cv/upload', authMiddleware, upload.single('cv'), async(req, res) 
             return res.status(400).json({ error: 'No file uploaded. Attach a PDF in a multipart/form-data "cv" field.' });
         }
 
-        if (!isSupabaseConfigured()) {
+        if (!isSupabaseConfigured() && !isLocalStorageConfigured()) {
             return res.status(503).json({
-                error: 'CV storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_KEY in the environment, then restart the API.'
+                error: 'CV storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_KEY, or set CV_STORAGE=local for local development, then restart the API.'
             });
         }
 
         // Unique, sanitized object name inside the bucket.
         const storedName = `cv-${Date.now()}-${Math.round(Math.random() * 1E9)}.pdf`;
-        const publicUrl = await uploadCvToStorage(req.file.buffer, storedName, req.file.mimetype);
+        const fileReference = isLocalStorageConfigured() ?
+            await uploadCvToLocalStorage(req.file.buffer, storedName) :
+            await uploadCvToStorage(req.file.buffer, storedName, req.file.mimetype);
 
         const client = await pool.connect();
 
@@ -905,14 +907,14 @@ app.post('/api/cv/upload', authMiddleware, upload.single('cv'), async(req, res) 
             // Deactivate any existing active CVs
             await client.query('UPDATE cvs SET is_active = false WHERE is_active = true');
 
-            // Insert new CV record (file_path now points at Supabase Storage)
+            // Store either the Supabase public URL or the shared local path.
             const { rows } = await client.query(
                 `INSERT INTO cvs (filename, original_name, file_path, file_size, mime_type, is_active)
                  VALUES ($1, $2, $3, $4, $5, true)
                  RETURNING id, filename, original_name, file_size, mime_type, uploaded_at`, [
                     storedName,
                     sanitizeFilename(req.file.originalname),
-                    publicUrl,
+                    fileReference,
                     req.file.size,
                     req.file.mimetype
                 ]
@@ -933,8 +935,8 @@ app.post('/api/cv/upload', authMiddleware, upload.single('cv'), async(req, res) 
             });
         } catch (err) {
             await client.query('ROLLBACK');
-            // Orphaned object in Storage if the DB insert failed — clean it up.
-            await deleteCvFile(publicUrl).catch(() => {});
+            // Orphaned file/object if the DB insert failed — clean it up.
+            await deleteCvFile(fileReference).catch(() => {});
             throw err;
         } finally {
             client.release();

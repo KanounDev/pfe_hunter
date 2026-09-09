@@ -19,12 +19,14 @@
 
 import 'dotenv/config';
 import { StorageClient } from '@supabase/storage-js';
-import { unlink } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const CV_BUCKET = 'cvs';
+const CV_STORAGE = (process.env.CV_STORAGE || 'supabase').toLowerCase();
+const CV_LOCAL_DIR = path.resolve(process.env.CV_LOCAL_DIR || path.join('uploads', 'cvs'));
 
 let client = null;
 
@@ -34,6 +36,14 @@ let client = null;
  */
 export function isSupabaseConfigured() {
     return Boolean(SUPABASE_URL && SUPABASE_SERVICE_KEY);
+}
+
+/**
+ * True when local filesystem storage was explicitly selected. This is for
+ * local development only; production continues to default to Supabase.
+ */
+export function isLocalStorageConfigured() {
+    return CV_STORAGE === 'local';
 }
 
 /**
@@ -124,11 +134,22 @@ export async function uploadCvToStorage(buffer, storedName, mimeType = 'applicat
 
     const { data } = storage.from(CV_BUCKET).getPublicUrl(storedName);
     // storage-js versions differ on the property name (publicUrl vs publicURL).
-    const publicUrl = data?.publicUrl ?? data?.publicURL;
+    const publicUrl = data && (data.publicUrl || data.publicURL);
     if (!publicUrl) {
         throw new Error('Supabase upload succeeded but no public URL was returned.');
     }
     return publicUrl;
+}
+
+/**
+ * Stores a CV on the local filesystem and returns the path recorded in the
+ * database. The API and worker must share CV_LOCAL_DIR when containerized.
+ */
+export async function uploadCvToLocalStorage(buffer, storedName) {
+    await mkdir(CV_LOCAL_DIR, { recursive: true });
+    const filePath = path.join(CV_LOCAL_DIR, storedName);
+    await writeFile(filePath, buffer, { flag: 'wx' });
+    return filePath;
 }
 
 /**
@@ -188,4 +209,3 @@ export async function downloadCvFromStorage(url) {
 
     return Buffer.from(await response.arrayBuffer());
 }
-

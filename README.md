@@ -42,6 +42,8 @@ See [Architecture.md](Architecture.md) for the data flow and [DEPLOYMENT.md](DEP
 GEMINI_API_KEY=your_gemini_api_key
 API_TOKEN=local_dev_token
 DISCORD_WEBHOOK_URL=
+# Store uploaded CVs in the local Docker volume instead of Supabase.
+CV_STORAGE=local
 ```
 
 2. Start the local services:
@@ -136,8 +138,10 @@ curl http://localhost:3001/api/health
 | `API_PORT` | No | API port; defaults to the application configuration |
 | `FRONTEND_URL` | No | Allowed dashboard origin for CORS |
 | `DISCORD_WEBHOOK_URL` | No | Fallback Discord webhook URL |
-| `SUPABASE_URL` | No | Supabase project URL for CV storage |
-| `SUPABASE_SERVICE_KEY` | No | Server-side Supabase service key |
+| `CV_STORAGE` | No | Set to `local` for local filesystem storage; defaults to Supabase |
+| `CV_LOCAL_DIR` | No | Local CV directory; defaults to `uploads/cvs` |
+| `SUPABASE_URL` | No | Supabase project URL for CV storage when `CV_STORAGE` is not `local` |
+| `SUPABASE_SERVICE_KEY` | No | Server-side Supabase service key when `CV_STORAGE` is not `local` |
 | `CV_FILE_PATH` | No | Local CV path used by the worker |
 | `NODE_ENV` | No | Runtime environment, such as `development` or `production` |
 
