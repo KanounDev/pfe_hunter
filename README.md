@@ -87,6 +87,8 @@ API_PORT=3001
 API_TOKEN=local_dev_token
 FRONTEND_URL=http://localhost:5173
 GEMINI_API_KEY=your_gemini_api_key
+CV_STORAGE=local
+CV_LOCAL_DIR=./uploads/cvs
 ```
 
 Start the API:
