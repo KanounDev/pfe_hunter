@@ -14,7 +14,7 @@ Complete guide to deploy PFE Hunter using 100% free tools.
                                                         │
                         ┌──────────────────┐            │
                         │  GitHub Actions  │────────────┘
-                        │  (Scraper/Cron)  │
+                        │ (Scraper/Scorer) │
                         └──────────────────┘
 ```
 
@@ -82,6 +82,11 @@ Go to **Settings → Secrets and variables → Actions** and add:
 | `SUPABASE_SERVICE_KEY` | Supabase service-role key used by GitHub Actions to download the active CV from Storage |
 | `API_TOKEN` | Token for API authentication |
 
+The API stores job postings, scores, settings, CV metadata, and pipeline
+history in the PostgreSQL database. Uploaded CV files are stored in the
+Supabase Storage `cvs` bucket; the active file's public URL is saved in
+`cvs.file_path`.
+
 ## Step 3: Frontend Deployment (Cloudflare Pages)
 
 ### 3.1 Build the Dashboard
@@ -113,6 +118,8 @@ Set the following environment variables
 | `VITE_API_URL` | `https://your-api.onrender.com/api` |
 | `VITE_API_TOKEN` | The same secret value configured as `API_TOKEN` on Render |
 
+## Step 4: Backend Deployment (Render)
+
 ### 4.1 Create Render Account
 
 1. Go to [render.com](https://render.com).
@@ -125,10 +132,9 @@ Set the following environment variables
 2. Select your `pfe-hunter` repository.
 3. Configure:
    - **Name:** `pfe-hunter-api`
-   - **Language:** `Python 3`
+   - **Language:** `Docker`
    - **Region:** Choose the region closest to you
    - **Branch:** `main`
-   - **Runtime:** `Docker`
    - **Dockerfile Path:** `./Dockerfile.api`
 
 ### 4.3 Set Environment Variables
@@ -145,6 +151,11 @@ Set the following environment variables
 | `SUPABASE_SERVICE_KEY` | Supabase service-role key used to access CV Storage |
 | `SUPABASE_URL` | Supabase project URL |
 
+Do not set `CV_STORAGE=local` or `CV_FILE_PATH` on Render. The Render
+filesystem is ephemeral, so dashboard-uploaded CVs must use Supabase Storage.
+The API defaults to Supabase when `CV_STORAGE` is omitted. After setting these
+variables, deploy or restart the service before uploading a CV.
+
 The automatic run interval is configured in the dashboard Settings page and
 stored in Supabase as `scrape_interval_minutes`. GitHub Actions checks every
 5 minutes, but the scraper and scoring pipeline run only after the configured
@@ -159,7 +170,7 @@ and is used only as a fallback when the database setting is empty.
 | Secret | Role |
 |--------|------|
 | `SUPABASE_URL` | Supabase project URL used by the Storage client to access the `cvs` bucket. |
-| `SUPABASE_SERVICE_KEY` | Server-side Supabase service-role key used to download the active CV from Storage. Never expose it in the dashboard or frontend. |
+| `SUPABASE_SERVICE_KEY` | Server-side Supabase service-role key used by the API and pipeline tooling to access CV Storage. Never expose it in the dashboard or frontend. |
 | `DATABASE_URL` | Supabase Postgres connection string used to find the active CV, read settings, scrape configuration, postings, and pipeline history. |
 
 ## Step 5: Test the Deployment
@@ -188,6 +199,11 @@ Do not commit the token or place it in a public repository.
 1. Go to your GitHub repository
 2. Click **Actions → PFE Hunter Pipeline**
 3. Click **Run workflow**
+
+The GitHub Actions workflow downloads the active CV from Supabase Storage into
+a temporary workspace file, runs the scraper and scoring pipeline, and removes
+the temporary file when the job finishes. It does not use the Render local
+filesystem.
 
 ## Monitoring
 

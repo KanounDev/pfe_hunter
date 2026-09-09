@@ -9,7 +9,7 @@ PFE Hunter is an AI-assisted job discovery platform for finding and ranking inte
 - Gemini-powered fit scoring
 - React dashboard for postings, scores, settings, and pipeline activity
 - Optional Discord notifications for high-scoring postings
-- CV upload and storage support through Supabase Storage
+- CV upload and storage support through local disk or Supabase Storage
 - Docker Compose setup for local API, database, and worker development
 
 ## Architecture
@@ -18,7 +18,7 @@ PFE Hunter is an AI-assisted job discovery platform for finding and ranking inte
 React dashboard (Vite)
         |
         v
-Node.js API (Express) <-> PostgreSQL / Supabase
+Node.js API (Express) <-> PostgreSQL
         ^
         |
 Python scraper and scoring worker -> Gemini -> Discord notifications
@@ -42,6 +42,8 @@ See [Architecture.md](Architecture.md) for the data flow and [DEPLOYMENT.md](DEP
 GEMINI_API_KEY=your_gemini_api_key
 API_TOKEN=local_dev_token
 DISCORD_WEBHOOK_URL=
+# Compose uses local CV storage and the persistent uploads_data volume.
+# Do not set CV_FILE_PATH when using a dashboard-uploaded CV.
 ```
 
 2. Start the local services:
@@ -50,7 +52,7 @@ DISCORD_WEBHOOK_URL=
 docker compose up --build
 ```
 
-The API is available at `http://localhost:3001` and the PostgreSQL database is available on port `5432`. The worker starts periodic scraping with the local Compose interval.
+The API is available at `http://localhost:3001` and the PostgreSQL database is available from the host at `localhost:5433` (it uses port `5432` inside Docker). The worker starts periodic scraping with the local Compose interval.
 
 3. Start the dashboard in a second terminal:
 
@@ -138,12 +140,12 @@ curl http://localhost:3001/api/health
 | `API_PORT` | No | API port; defaults to the application configuration |
 | `FRONTEND_URL` | No | Allowed dashboard origin for CORS |
 | `DISCORD_WEBHOOK_URL` | No | Fallback Discord webhook URL |
-| `CV_STORAGE` | No | Set to `local` for local filesystem storage; defaults to Supabase |
+| `CV_STORAGE` | No | Set to `local` for local filesystem storage; defaults to Supabase Storage |
 | `CV_LOCAL_DIR` | No | Local CV directory; defaults to `uploads/cvs` |
 | `SUPABASE_URL` | No | Supabase project URL for CV storage when `CV_STORAGE` is not `local` |
 | `SUPABASE_SERVICE_KEY` | No | Server-side Supabase service key when `CV_STORAGE` is not `local` |
-| `CV_FILE_PATH` | No | Local CV path used by the worker |
-| `NODE_ENV` | No | Runtime environment, such as `development` or `production` |
+| `CV_FILE_PATH` | No | Legacy local CV path; omit it when using a dashboard-uploaded CV |
+| `NODE_ENV` | No | Runtime environment; defaults to unset unless configured |
 
 Never commit `.env` files, API keys, database passwords, service-role keys, webhook URLs, or CV files.
 
