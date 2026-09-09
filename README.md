@@ -42,8 +42,6 @@ See [Architecture.md](Architecture.md) for the data flow and [DEPLOYMENT.md](DEP
 GEMINI_API_KEY=your_gemini_api_key
 API_TOKEN=local_dev_token
 DISCORD_WEBHOOK_URL=
-# Store uploaded CVs in the local Docker volume instead of Supabase.
-CV_STORAGE=local
 ```
 
 2. Start the local services:
