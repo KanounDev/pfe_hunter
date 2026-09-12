@@ -141,6 +141,21 @@ Set the following environment variables
 
 ### 4.2 Create Web Service
 
+The API needs both Node.js (the Express server) and Python (the scraper) at
+runtime. Pick **one** of the two configurations below — do not mix settings
+from both.
+
+> **Python version warning:** Render's default Python for services created on
+> or after 2026-02-11 is **3.14**, which breaks this project's pinned Python
+> dependencies (`psycopg2-binary` fails with
+> `undefined symbol: _PyInterpreterState_Get`). The repository pins Python
+> **3.11** via the `.python-version` file at the repo root — the same version
+> used by GitHub Actions (`.github/workflows/pipeline.yml`) and both
+> Dockerfiles. If you use the native Python runtime, check the build logs and
+> confirm the venv was created with Python 3.11.x.
+
+**Option A — Native Python runtime (recommended):**
+
 1. Under **Web Services**, click **New Web Service**.
 2. Select your `pfe-hunter` repository.
 3. Configure:
@@ -150,8 +165,21 @@ Set the following environment variables
    - **Branch:** `main`
    - **Build Command:** `npm install && pip install -r requirements.txt`
    - **Start Command:** `npm start`
+4. Render reads the repo's `.python-version` file and provisions Python 3.11
+   automatically. To force an exact patch version, set the environment
+   variable `PYTHON_VERSION=3.11.13` under **Environment**.
+
+**Option B — Docker runtime (Python 3.11 baked into `Dockerfile.api`):**
+
+1. Same repository, region, and branch as Option A, but:
    - **Runtime:** `Docker`
    - **Dockerfile Path:** `./Dockerfile.api`
+2. Leave the Build/Start command fields empty — the Dockerfile already
+   installs Node.js and the Python dependencies and runs `node api.mjs`.
+
+After changing the runtime, the Python version, or `PYTHON_VERSION`, redeploy
+with **Manual Deploy → Clear build cache and deploy** so the `.venv` is
+rebuilt with the correct interpreter instead of reusing a cached one.
 
 ### 4.3 Set Environment Variables
 
@@ -280,6 +308,27 @@ filesystem.
 - Check GitHub Actions logs for specific error
 - Verify all secrets are set correctly
 - Test locally with same environment variables
+
+### Scraper fails with `undefined symbol: _PyInterpreterState_Get`
+
+```
+ImportError: /opt/render/project/src/.venv/lib/python3.14/site-packages/psycopg2/
+_psycopg.cpython-314-x86_64-linux-gnu.so: undefined symbol: _PyInterpreterState_Get
+```
+
+The `python3.14` in the path is the giveaway: the Render service is running
+**Python 3.14** (Render's default for services created on or after
+2026-02-11), but the pinned `psycopg2-binary` release was built against older
+CPython internals, so its C extension cannot load.
+
+Fix:
+1. Make sure the repo root contains the `.python-version` file with `3.11`
+   (committed in this repository), or set the `PYTHON_VERSION` environment
+   variable to `3.11.13` on the Render service.
+2. Redeploy with **Manual Deploy → Clear build cache and deploy** so the
+   `.venv` is rebuilt with Python 3.11 instead of reusing the cached 3.14 one.
+3. Confirm in the build logs that Python 3.11.x was installed before
+   `pip install -r requirements.txt` runs.
 
 ## Cost Breakdown (All Free Tiers)
 

@@ -1,11 +1,19 @@
 # Python dependencies for PFE Hunter
 # Pin versions for reproducibility - scraping libs break often
+#
+# Target runtime: Python 3.11
+#   - Render native runtime reads the repo-root .python-version file
+#   - GitHub Actions uses python-version: '3.11'
+#   - Dockerfiles use python:3.11-slim
+# Do NOT bump past Python 3.11 without re-testing every pinned dep below.
 
 # Job scraping
 python-jobspy==1.1.82
 
 # Database
-psycopg2-binary==2.9.9
+# 2.9.11+ ships wheels for CPython 3.13/3.14; 2.9.9 crashes on Python 3.14
+# with "undefined symbol: _PyInterpreterState_Get"
+psycopg2-binary==2.9.11
 
 # Environment
 python-dotenv==1.0.1

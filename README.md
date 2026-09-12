@@ -30,7 +30,7 @@ See [Architecture.md](Architecture.md) for the data flow and [DEPLOYMENT.md](DEP
 
 - Node.js 20 or newer
 - npm
-- Python 3.10 or newer for the scraper worker
+- Python 3.11 for the scraper worker (pinned via `.python-version`; Render, GitHub Actions, and the Dockerfiles all use it)
 - Docker Desktop, if using the Compose setup
 - A Google Gemini API key for scoring
 
