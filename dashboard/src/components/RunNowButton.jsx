@@ -130,12 +130,6 @@ function RunNowButton() {
               style={{ width: `${getProgressPercentage()}%` }}
             />
           </div>
-
-          <div className="progress-stats">
-            <span>📊 {runStatus.postings_found || 0} found</span>
-            <span>💾 {runStatus.postings_inserted || 0} inserted</span>
-            <span>🎯 {runStatus.postings_scored || 0} scored</span>
-          </div>
         </div>
       )}
 
