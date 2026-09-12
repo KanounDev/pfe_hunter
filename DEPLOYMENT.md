@@ -71,8 +71,7 @@ git push -u origin main
 ```
 
 Replace `my-pfe-hunter` with your preferred repository name. The `--push`
-option uploads the cloned project to your new repository. If you only want to
-use the original repository, skip this step.
+option uploads the cloned project to your new repository. 
 
 Before pushing, verify that local environment files are not tracked:
 
