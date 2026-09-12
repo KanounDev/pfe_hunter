@@ -166,8 +166,6 @@ Never commit `.env` files, API keys, database passwords, service-role keys, webh
 
 - [Deployment Guide](DEPLOYMENT.md)
 - [Architecture](Architecture.md)
-- [Testing Guide](TESTING_GUIDE.md)
-- [Scraper Guide](SCRAPER_GUIDE.md)
 
 ## License
 
