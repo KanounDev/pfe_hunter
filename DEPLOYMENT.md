@@ -148,9 +148,9 @@ Set the following environment variables
    - **Language:** `Python 3`
    - **Region:** Choose the region closest to you
    - **Branch:** `main`
-   - **Runtime:** `Docker`
-   - **Build Command:** `npm install`
+   - **Build Command:** `npm install && pip install -r requirements.txt`
    - **Start Command:** `npm start`
+   - **Runtime:** `Docker`
    - **Dockerfile Path:** `./Dockerfile.api`
 
 ### 4.3 Set Environment Variables
@@ -189,6 +189,45 @@ and is used only as a fallback when the database setting is empty.
 | `SUPABASE_SERVICE_KEY` | Server-side Supabase service-role key used by the API and pipeline tooling to access CV Storage. Never expose it in the dashboard or frontend. |
 | `DATABASE_URL` | Supabase Postgres connection string used to find the active CV, read settings, scrape configuration, postings, and pipeline history. |
 
+## CORS Configuration for Remote Dashboards
+
+If you deploy the React dashboard to **Cloudflare Pages** or another remote hosting service, you must update the CORS allowlist in `api.mjs` (lines 94-115) to allow requests from your dashboard's URL.
+
+### For Cloudflare Pages Deployment
+
+By default, `api.mjs` includes basic CORS rules for local development:
+
+```javascript
+const allowedOrigins = [
+    'http://localhost:5173',  // Local development
+    'https://pfe-hunter.pages.dev',  // Your main Cloudflare Pages domain
+];
+```
+
+If your dashboard is deployed to a different URL (e.g., a preview/branch deployment or custom domain), add it to the `allowedOrigins` array:
+
+```javascript
+const allowedOrigins = [
+    'http://localhost:5173',
+    'https://pfe-hunter.pages.dev',
+    'https://your-dashboard-url.com',  // Add your dashboard URL here
+];
+```
+
+Alternatively, the code already supports wildcard matching for Cloudflare preview URLs (`.pages.dev`), so most deployments should work automatically. If you still see **"Connection Error: Cannot connect to API server"** errors:
+
+1. Check the browser console for CORS error messages
+2. Verify the dashboard is using the correct API URL in `VITE_API_URL` environment variable
+3. Ensure the API is running and accessible at the configured URL
+4. Update `allowedOrigins` in `api.mjs` with your exact dashboard domain
+5. Restart the API after making CORS changes
+
+### Production Deployment
+
+When deploying to production hosting (Render, Vercel, Railway, etc.), always:
+- Set `FRONTEND_URL` environment variable to your dashboard's public URL
+- Update `allowedOrigins` in `api.mjs` before deploying
+- Verify CORS headers are set correctly by checking network requests in your browser
 ## Step 5: Test the Deployment
 
 ### 5.1 Check API Health
