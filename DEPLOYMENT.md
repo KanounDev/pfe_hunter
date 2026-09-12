@@ -23,9 +23,10 @@ Complete guide to deploy PFE Hunter using 100% free tools.
 1. Go to [supabase.com](https://supabase.com) and create a free account
 2. Create a new project
 3. Go to **Connect**
-4. Select **Transaction pooler** as the Connection Method
-5. Copy the **Connection string** (URI format)
-6. Add `?sslmode=require` to the end:
+4. Select **Direct** Connection string
+5. Select **Transaction pooler** as the Connection Method
+6. Copy the **Connection string** (URI format)
+7. Add `?sslmode=require` to the end:
    ```
    postgres://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?sslmode=require
    ```
