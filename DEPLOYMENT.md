@@ -43,6 +43,16 @@ Clone the repository into a local folder. The cloned project already contains
 its Git history, so you do not need to run `git init`.
 
 ```bash
+git clone https://github.com/KanounDev/pfe_hunter.git
+cd pfe_hunter
+```
+
+### 2.2 Create your own GitHub repository (optional)
+
+If you want to maintain your own copy and GitHub Actions workflows, create a
+new empty repository first, then point the cloned project to it:
+
+```bash
 # 1. Log into your GitHub account
 gh auth login
 
@@ -58,16 +68,6 @@ git remote add origin <your-github-repo-url>
 # 5. Push your code
 git branch -M main
 git push -u origin main
-```
-
-### 2.2 Create your own GitHub repository (optional)
-
-If you want to maintain your own copy and GitHub Actions workflows, create a
-new empty repository first, then point the cloned project to it:
-
-```bash
-gh auth login
-gh repo create my-pfe-hunter --public --source=. --remote=origin --push
 ```
 
 Replace `my-pfe-hunter` with your preferred repository name. The `--push`
