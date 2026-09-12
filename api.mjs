@@ -93,7 +93,7 @@ if (process.env.NODE_ENV === 'production') {
 // Allow both the main domain and Cloudflare Pages preview URLs
 const allowedOrigins = [
     'http://localhost:5173',
-    'https://pfe-hunter.pages.dev',
+    'https://my-pfe-hunter.pages.dev/',
 ];
 
 // In production, also allow any *.pages.dev preview URLs
@@ -1158,9 +1158,13 @@ app.get('/api/pipeline/status', async(req, res) => {
                     finished_at: formatDate(rows[0].finished_at),
                     elapsed_seconds: rows[0].elapsed_seconds
                 };
+            } else {
+                currentPipelineRun = null;
             }
 
-            return res.json({ run: currentPipelineRun });
+            if (currentPipelineRun) {
+                return res.json({ run: currentPipelineRun });
+            }
         }
 
         // No current run, check for most recent run
@@ -1363,10 +1367,12 @@ async function executePipeline(runId) {
              WHERE id = $1`, [runId, rows[0].postings_inserted, rows[0].postings_scored]
         );
 
-        currentPipelineRun.status = 'success';
-        currentPipelineRun.step = 'completed';
-        currentPipelineRun.postings_inserted = parseInt(rows[0].postings_inserted);
-        currentPipelineRun.postings_scored = parseInt(rows[0].postings_scored);
+        if (currentPipelineRun && currentPipelineRun.id === runId) {
+            currentPipelineRun.status = 'success';
+            currentPipelineRun.step = 'completed';
+            currentPipelineRun.postings_inserted = parseInt(rows[0].postings_inserted);
+            currentPipelineRun.postings_scored = parseInt(rows[0].postings_scored);
+        }
 
         console.log(`Pipeline run ${runId} completed successfully`);
 
