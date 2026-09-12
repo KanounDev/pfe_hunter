@@ -297,7 +297,7 @@ function Settings() {
               onChange={(e) => handleChange('scrape_interval_minutes', parseInt(e.target.value) || 5)}
               className="setting-input"
             />
-            <span className="setting-hint">5 minutes to 7 days. The workflow polls every 5 minutes.</span>
+            <span className="setting-hint">5 minutes to 7 days.</span>
           </div>
 
           <div className="setting-item">
@@ -488,7 +488,6 @@ function Settings() {
                 </label>
               ))}
             </div>
-            <span className="setting-hint">JobTeaser requires custom implementation</span>
           </div>
 
           <div className="setting-item">
