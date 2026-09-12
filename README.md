@@ -130,25 +130,6 @@ Check the API health endpoint with:
 curl http://localhost:3001/api/health
 ```
 
-## Environment Variables
-
-| Variable | Required | Description |
-| --- | --- | --- |
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `GEMINI_API_KEY` | Yes for scoring | Google Gemini API key |
-| `API_TOKEN` | Recommended | Token used to authenticate dashboard API requests |
-| `API_PORT` | No | API port; defaults to the application configuration |
-| `FRONTEND_URL` | No | Allowed dashboard origin for CORS |
-| `DISCORD_WEBHOOK_URL` | No | Fallback Discord webhook URL |
-| `CV_STORAGE` | No | Set to `local` for local filesystem storage; defaults to Supabase Storage |
-| `CV_LOCAL_DIR` | No | Local CV directory; defaults to `uploads/cvs` |
-| `SUPABASE_URL` | No | Supabase project URL for CV storage when `CV_STORAGE` is not `local` |
-| `SUPABASE_SERVICE_KEY` | No | Server-side Supabase service key when `CV_STORAGE` is not `local` |
-| `CV_FILE_PATH` | No | Legacy local CV path; omit it when using a dashboard-uploaded CV |
-| `NODE_ENV` | No | Runtime environment; defaults to unset unless configured |
-
-Never commit `.env` files, API keys, database passwords, service-role keys, webhook URLs, or CV files.
-
 ## Project Structure
 
 - `api.mjs` - Express API server
