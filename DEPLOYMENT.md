@@ -28,7 +28,7 @@ Complete guide to deploy PFE Hunter using 100% free tools.
 6. Copy the **Connection string** (URI format)
 7. Add `?sslmode=require` to the end:
    ```
-   postgres://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?sslmode=require
+   postgres://postgres.[ref]:[password]@aws-1-[region].pooler.supabase.com:6543/postgres?sslmode=require
    ```
 
 ### Save as GitHub Secret:
