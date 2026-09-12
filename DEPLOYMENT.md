@@ -149,6 +149,8 @@ Set the following environment variables
    - **Region:** Choose the region closest to you
    - **Branch:** `main`
    - **Runtime:** `Docker`
+   - **Build Command:** `npm install`
+   - **Start Command:** `npm start`
    - **Dockerfile Path:** `./Dockerfile.api`
 
 ### 4.3 Set Environment Variables
