@@ -155,10 +155,6 @@ function Dashboard() {
               <div className="empty-activity">
                 <span className="empty-chart-icon">⏱️</span>
                 <p>No activity yet</p>
-                <p className="text-muted">
-                  Run your first pipeline to start collecting and scoring job postings.
-                  It also runs automatically every 5 hours via GitHub Actions.
-                </p>
                 <button
                   className="btn btn-primary empty-activity-cta"
                   onClick={handleFirstRun}
