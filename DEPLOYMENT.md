@@ -118,7 +118,7 @@ npm run build
 4. Click **Get started** next to **Import an existing Git repository**.
 5. Select your GitHub repository.
 6. Configure the build settings:
-   - **Framework preset:** `Vite`
+   - **Framework preset:** `React (Vite)`
    - **Build command:** `npm run build`
    - **Build output directory:** `/dist`
    - **Path / root directory:** `/dashboard`
