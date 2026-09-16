@@ -2,20 +2,23 @@
 //
 // The "LLM Agent — Gemini API" box in the architecture diagram. Takes
 // newly-deduped postings (the output of db.mjs's dedupeAndInsert) and
-// asks Gemini to score each one against the candidate's CV (uploaded via
+// asks Gemini (or Groq as fallback) to score each one against the candidate's CV (uploaded via
 // Files API), returning the same postings with fit_score + fit_reasoning attached.
 //
 // SETUP:
 //   Add to .env:
 //     GEMINI_API_KEY=your-key-from-aistudio.google.com
+//     GROQ_API_KEY=your-key-from-console.groq.com (optional — fallback for 5xx errors)
 //     CV_SUPABASE_URL=<public URL of the CV in Supabase Storage>   (preferred)
 //     CV_FILE_PATH=path/to/cv.pdf                                  (legacy/CI)
 //     (or pass a path / Supabase URL as an argument to initialize())
 //
-// Uses @google/genai SDK with Files API for CV upload.
+// Uses @google/genai SDK with Files API for CV upload (Gemini).
+// Falls back to groq-sdk for scoring if Gemini returns 5xx errors.
 
 import 'dotenv/config';
 import { GoogleGenAI } from '@google/genai';
+import Groq from 'groq-sdk';
 import { writeFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
@@ -23,11 +26,15 @@ import path from 'node:path';
 import { downloadCvFromStorage } from './supabase-storage.mjs';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'mixtral-8x7b-32768';
 
 // Module-level state for the uploaded CV file
 let uploadedFile = null;
 let genAI = null;
+let groqClient = null;
+let cvContent = null; // For Groq fallback, store CV as base64
 
 /**
  * Resolves the local path of the CV to upload to Gemini.
@@ -73,6 +80,7 @@ async function resolveCvPath(cvPathOverride) {
 
 /**
  * Initializes the Gemini client and uploads the CV file.
+ * Also initializes Groq client if available for fallback scenarios.
  * Must be called before scorePostingsBatch().
  *
  * When the CV lives in Supabase Storage (CV_SUPABASE_URL set) it is
@@ -94,11 +102,22 @@ export async function initialize(cvPathOverride) {
 
     genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
+    // Initialize Groq client if API key is available
+    if (GROQ_API_KEY) {
+        groqClient = new Groq({ apiKey: GROQ_API_KEY });
+        console.log('Groq API key detected — will use as fallback for 5xx errors.');
+    }
+
     try {
         console.log(`Uploading CV from ${cvPath}...`);
         uploadedFile = await genAI.files.upload({
             file: cvPath,
         });
+
+        // Store CV content as base64 for Groq fallback
+        const fs = await import('fs');
+        const cvBuffer = fs.readFileSync(cvPath);
+        cvContent = cvBuffer.toString('base64');
 
         console.log(`CV uploaded successfully. File URI: ${uploadedFile.uri}`);
     } finally {
@@ -147,8 +166,69 @@ Respond with ONLY a JSON array, no markdown fences, no extra text, in exactly th
 }
 
 /**
+ * Scores a batch of postings with Groq as a fallback when Gemini fails.
+ * Groq doesn't support Files API, so it uses base64-encoded CV content instead.
+ *
+ * @param {Array} postings - deduped postings (job_id, title, company, ...)
+ * @returns {Promise<Array>} same postings + fit_score + fit_reasoning
+ */
+export async function scorePostingsBatchGroq(postings) {
+    if (!groqClient) {
+        throw new Error('Groq client not initialized. Set GROQ_API_KEY in .env.');
+    }
+
+    if (!cvContent) {
+        throw new Error('CV content not available for Groq fallback.');
+    }
+
+    const prompt = buildPrompt(postings);
+
+    console.log(`🔄 Falling back to Groq (${GROQ_MODEL}) for scoring...`);
+
+    const response = await groqClient.messages.create({
+        model: GROQ_MODEL,
+        max_tokens: 2048,
+        messages: [
+            {
+                role: 'user',
+                content: [
+                    {
+                        type: 'text',
+                        text: `Here is the candidate's CV (base64 encoded):\n\n${cvContent}\n\n---\n\n${prompt}`,
+                    },
+                ],
+            },
+        ],
+    });
+
+    const text = response?.content?.[0]?.text;
+    if (!text) {
+        throw new Error('Groq returned no scoreable text content.');
+    }
+
+    let scores;
+    try {
+        scores = JSON.parse(text);
+    } catch (err) {
+        throw new Error(`Could not parse Groq's JSON output: ${err.message}\nRaw response: ${text}`);
+    }
+
+    const scoreByJobId = new Map(scores.map((s) => [s.job_id, s]));
+
+    return postings.map((p) => {
+        const s = scoreByJobId.get(p.job_id);
+        return {
+            ...p,
+            fit_score: s?.fit_score ?? null,
+            fit_reasoning: s?.fit_reasoning ?? null,
+        };
+    });
+}
+
+/**
  * Scores a batch of postings with Gemini using the uploaded CV file context
  * and merges fit_score/fit_reasoning back onto each posting.
+ * If Gemini returns a 5xx error, falls back to Groq if available.
  * Matches postings to scores by job_id, so the order Gemini returns them in doesn't matter.
  *
  * IMPORTANT: Call initialize() first to upload the CV file.
@@ -169,44 +249,53 @@ export async function scorePostingsBatch(postings) {
 
     const prompt = buildPrompt(postings);
 
-    const response = await genAI.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [{
-            role: 'user',
-            parts: [{
-                    fileData: {
-                        mimeType: uploadedFile.mimeType,
-                        fileUri: uploadedFile.uri,
-                    },
-                },
-                { text: prompt },
-            ],
-        }, ],
-        config: {
-            responseMimeType: 'application/json',
-        },
-    });
-
-    const text = response?.text;
-    if (!text) {
-        throw new Error('Gemini returned no scoreable text content.');
-    }
-
-    let scores;
     try {
-        scores = JSON.parse(text);
+        const response = await genAI.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: [{
+                role: 'user',
+                parts: [{
+                        fileData: {
+                            mimeType: uploadedFile.mimeType,
+                            fileUri: uploadedFile.uri,
+                        },
+                    },
+                    { text: prompt },
+                ],
+            }, ],
+            config: {
+                responseMimeType: 'application/json',
+            },
+        });
+
+        const text = response?.text;
+        if (!text) {
+            throw new Error('Gemini returned no scoreable text content.');
+        }
+
+        let scores;
+        try {
+            scores = JSON.parse(text);
+        } catch (err) {
+            throw new Error(`Could not parse Gemini's JSON output: ${err.message}\nRaw response: ${text}`);
+        }
+
+        const scoreByJobId = new Map(scores.map((s) => [s.job_id, s]));
+
+        return postings.map((p) => {
+            const s = scoreByJobId.get(p.job_id);
+            return {
+                ...p,
+                fit_score: s?.fit_score ?? null,
+                fit_reasoning: s?.fit_reasoning ?? null,
+            };
+        });
     } catch (err) {
-        throw new Error(`Could not parse Gemini's JSON output: ${err.message}\nRaw response: ${text}`);
+        // Check if error is a 5xx server error and Groq fallback is available
+        if (err.status >= 500 && err.status < 600 && groqClient) {
+            console.warn(`⚠️  Gemini returned ${err.status} error: ${err.message}`);
+            return scorePostingsBatchGroq(postings);
+        }
+        throw err;
     }
-
-    const scoreByJobId = new Map(scores.map((s) => [s.job_id, s]));
-
-    return postings.map((p) => {
-        const s = scoreByJobId.get(p.job_id);
-        return {
-            ...p,
-            fit_score: s?.fit_score ?? null,
-            fit_reasoning: s?.fit_reasoning ?? null,
-        };
-    });
 }
