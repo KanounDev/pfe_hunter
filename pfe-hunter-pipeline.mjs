@@ -5,18 +5,20 @@
 // NEW FLOW (no intermediate JSON file):
 //   1. Python scraper (scrape_jobspy.py) writes DIRECTLY to Postgres with dedup
 //   2. This pipeline queries for unscored postings from Postgres
-//   3. Score new postings against the CV (Gemini Files API)
+//   3. Score new postings against the CV (Gemini Files API with Groq fallback)
 //   4. Save scores back to Postgres
 //   5. Hand scored postings to Gemini via MCP to decide on Discord alert
 //
 // SETUP:
 //   1. Run the scraper first: python scrape_jobspy.py
 //      (writes directly to Postgres, no JSON file)
-//   2. npm install pg dotenv @google/genai @modelcontextprotocol/sdk zod
+//   2. npm install pg dotenv @google/genai @modelcontextprotocol/sdk zod groq-sdk
 //   3. .env needs:
 //        DATABASE_URL=postgres://user:password@localhost:5432/pfe_hunter
 //        GEMINI_API_KEY=...
+//        GROQ_API_KEY=...             (optional — fallback for 5xx errors)
 //        GEMINI_MODEL=...            (optional — used by gemini-mcp-client.mjs)
+//        GROQ_MODEL=...              (optional — used as fallback)
 //        CV_FILE_PATH=...            (optional — defaults to the CV in this folder)
 //        DISCORD_WEBHOOK_URL=...     (optional — dry-runs if unset)
 //   4. node pfe-hunter-pipeline.mjs
@@ -48,7 +50,8 @@ async function loadUnscoredPostings() {
 
 /**
  * Scores every unscored posting against the CV and writes the scores
- * back to Postgres. Deliberately NOT capped at some max-per-run count:
+ * back to Postgres. Automatically falls back to Groq if Gemini returns
+ * a 5xx error. Deliberately NOT capped at some max-per-run count:
  * a row skipped here would sit forever with fit_score = NULL.
  */
 async function scoreAndPersist(postings) {
@@ -57,7 +60,7 @@ async function scoreAndPersist(postings) {
         return [];
     }
 
-    console.log(`Scoring ${postings.length} posting(s) with Gemini...`);
+    console.log(`Scoring ${postings.length} posting(s) with Gemini (Groq fallback enabled)...`);
     const scored = await scorePostingsBatch(postings);
 
     for (const p of scored) {
