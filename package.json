@@ -1,7 +1,7 @@
 {
   "name": "pfe-hunter",
   "version": "1.0.0",
-  "description": "PFE Hunter - AI-powered job posting scraper and analyzer with Gemini scoring",
+  "description": "PFE Hunter - AI-powered job posting scraper and analyzer with Gemini scoring (with Groq fallback)",
   "main": "api.mjs",
   "engines": {
     "node": ">=20"
@@ -14,6 +14,7 @@
     "job-scraper",
     "ai",
     "gemini",
+    "groq",
     "job-search",
     "career",
     "internship"
@@ -30,6 +31,7 @@
     "dotenv": "^17.4.2",
     "express": "^4.18.2",
     "express-rate-limit": "^7.1.5",
+    "groq-sdk": "^0.9.0",
     "helmet": "^7.1.0",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
