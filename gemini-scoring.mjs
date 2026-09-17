@@ -1,4 +1,4 @@
-// gemini-scoring.mjs
++// gemini-scoring.mjs
 //
 // The "LLM Agent — Gemini API" box in the architecture diagram. Takes
 // newly-deduped postings (the output of db.mjs's dedupeAndInsert) and
