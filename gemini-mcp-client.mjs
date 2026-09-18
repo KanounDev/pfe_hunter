@@ -17,7 +17,9 @@
 //   npm install @modelcontextprotocol/sdk
 //   .env needs GEMINI_API_KEY (same one gemini-scoring.mjs already uses)
 
-import 'dotenv/config';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+require('dotenv').config();
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { fileURLToPath } from 'node:url';
