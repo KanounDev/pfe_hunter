@@ -8,7 +8,7 @@
 // SETUP:
 //   Add to .env:
 //     GEMINI_API_KEY=your-key-from-aistudio.google.com
-//     GROQ_API_KEY=your-key-from-console.groq.com (optional — fallback for 5xx errors)
+//     GROQ_API_KEY=your-key-from-console.groq.com (fallback for 5xx errors)
 //     CV_SUPABASE_URL=<public URL of the CV in Supabase Storage>   (preferred)
 //     CV_FILE_PATH=path/to/cv.pdf                                  (legacy/CI)
 //     (or pass a path / Supabase URL as an argument to initialize())
@@ -21,7 +21,7 @@ const require = createRequire(import.meta.url);
 require('dotenv').config();
 import { GoogleGenAI } from '@google/genai';
 import Groq from 'groq-sdk';
-import { writeFile, unlink } from 'node:fs/promises';
+import { writeFile, unlink, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,13 +30,13 @@ import { downloadCvFromStorage } from './supabase-storage.mjs';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'qwen/qwen3-32b';
 
 // Module-level state for the uploaded CV file
 let uploadedFile = null;
 let genAI = null;
 let groqClient = null;
-let cvContent = null; // For Groq fallback, store CV as base64
+let cvTextContent = null; // CV text for Groq (extracted/readable format)
 
 /**
  * Resolves the local path of the CV to upload to Gemini.
@@ -81,8 +81,29 @@ async function resolveCvPath(cvPathOverride) {
 }
 
 /**
+ * Extracts text content from CV file for Groq fallback.
+ * For PDF files, reads as buffer and encodes to base64 for multimodal models.
+ * For text files, reads directly.
+ *
+ * @param {string} cvPath - Path to CV file
+ * @returns {Promise<string>} CV content (text or base64-encoded)
+ */
+async function extractCvContent(cvPath) {
+    const buffer = await readFile(cvPath);
+
+    // Check if it's a PDF by extension
+    if (cvPath.toLowerCase().endsWith('.pdf')) {
+        // For multimodal models, encode as base64
+        return buffer.toString('base64');
+    }
+
+    // For text files, return as string
+    return buffer.toString('utf-8');
+}
+
+/**
  * Initializes the Gemini client and uploads the CV file.
- * Also initializes Groq client if available for fallback scenarios.
+ * Also initializes Groq client for fallback scenarios.
  * Must be called before scorePostingsBatch().
  *
  * When the CV lives in Supabase Storage (CV_SUPABASE_URL set) it is
@@ -92,41 +113,57 @@ async function resolveCvPath(cvPathOverride) {
  * @returns {Promise<void>}
  */
 export async function initialize(cvPathOverride) {
-    if (!GEMINI_API_KEY) {
-        throw new Error('GEMINI_API_KEY is not set in .env.');
+    // Initialize Groq client FIRST (it's always needed as fallback)
+    if (GROQ_API_KEY) {
+        groqClient = new Groq({ apiKey: GROQ_API_KEY });
+        console.log('Groq API client initialized — will use as fallback for Gemini errors.');
+    } else {
+        console.warn('⚠️  GROQ_API_KEY not set — no fallback available if Gemini fails.');
     }
 
+    // Resolve CV path
     const { cvPath, tempFile } = await resolveCvPath(cvPathOverride);
 
     if (!existsSync(cvPath)) {
         throw new Error(`CV file not found at: ${cvPath}`);
     }
 
-    genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-
-    // Initialize Groq client if API key is available
-    if (GROQ_API_KEY) {
-        groqClient = new Groq({ apiKey: GROQ_API_KEY });
-        console.log('Groq API key detected — will use as fallback for 5xx errors.');
+    // Extract CV content for Groq fallback BEFORE any Gemini operations
+    // This ensures Groq can work even if Gemini initialization fails
+    try {
+        cvTextContent = await extractCvContent(cvPath);
+        console.log(`CV content extracted for fallback (${(cvTextContent.length / 1024).toFixed(1)} KB).`);
+    } catch (err) {
+        console.warn('Could not extract CV text for fallback:', err.message);
     }
 
-    try {
-        console.log(`Uploading CV from ${cvPath}...`);
-        uploadedFile = await genAI.files.upload({
-            file: cvPath,
-        });
+    // Initialize Gemini if API key is available
+    if (GEMINI_API_KEY) {
+        genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-        // Store CV content as base64 for Groq fallback
-        const fs = await import('fs');
-        const cvBuffer = fs.readFileSync(cvPath);
-        cvContent = cvBuffer.toString('base64');
-
-        console.log(`CV uploaded successfully. File URI: ${uploadedFile.uri}`);
-    } finally {
-        // Remove the downloaded temp file — Gemini has its own copy now.
-        if (tempFile) {
-            await unlink(tempFile).catch(() => {});
+        try {
+            console.log(`Uploading CV to Gemini from ${cvPath}...`);
+            uploadedFile = await genAI.files.upload({
+                file: cvPath,
+            });
+            console.log(`CV uploaded successfully to Gemini. File URI: ${uploadedFile.uri}`);
+        } catch (err) {
+            console.warn(`Failed to upload CV to Gemini: ${err.message}`);
+            if (!groqClient) {
+                throw new Error('Neither Gemini nor Groq is available for scoring.');
+            }
+            console.log('Will use Groq as primary scorer since Gemini upload failed.');
         }
+    } else {
+        console.log('GEMINI_API_KEY not set — using Groq as primary scorer.');
+        if (!groqClient) {
+            throw new Error('Neither GEMINI_API_KEY nor GROQ_API_KEY is set.');
+        }
+    }
+
+    // Clean up temp file
+    if (tempFile) {
+        await unlink(tempFile).catch(() => {});
     }
 }
 
@@ -168,8 +205,8 @@ Respond with ONLY a JSON array, no markdown fences, no extra text, in exactly th
 }
 
 /**
- * Scores a batch of postings with Groq as a fallback when Gemini fails.
- * Groq doesn't support Files API, so it uses base64-encoded CV content instead.
+ * Scores a batch of postings with Groq using the CV content.
+ * Uses OpenAI-compatible chat.completions API.
  *
  * @param {Array} postings - deduped postings (job_id, title, company, ...)
  * @returns {Promise<Array>} same postings + fit_score + fit_reasoning
@@ -179,40 +216,56 @@ export async function scorePostingsBatchGroq(postings) {
         throw new Error('Groq client not initialized. Set GROQ_API_KEY in .env.');
     }
 
-    if (!cvContent) {
-        throw new Error('CV content not available for Groq fallback.');
+    if (!cvTextContent) {
+        throw new Error('CV content not available for Groq scoring.');
     }
 
     const prompt = buildPrompt(postings);
 
-    console.log(`🔄 Falling back to Groq (${GROQ_MODEL}) for scoring...`);
+    console.log(`🔄 Scoring with Groq (${GROQ_MODEL})...`);
 
-    const response = await groqClient.messages.create({
+    const response = await groqClient.chat.completions.create({
         model: GROQ_MODEL,
-        max_tokens: 2048,
         messages: [
             {
+                role: 'system',
+                content: 'You are a job matching assistant. Analyze job postings against candidate CVs and provide fit scores. Always respond with valid JSON only, no markdown fences.',
+            },
+            {
                 role: 'user',
-                content: [
-                    {
-                        type: 'text',
-                        text: `Here is the candidate's CV (base64 encoded):\n\n${cvContent}\n\n---\n\n${prompt}`,
-                    },
-                ],
+                content: `Here is the candidate's CV (base64 encoded PDF):\n\n${cvTextContent}\n\n---\n\n${prompt}`,
             },
         ],
+        temperature: 0.3,
+        max_tokens: 2048,
     });
 
-    const text = response?.content?.[0]?.text;
+    const text = response?.choices?.[0]?.message?.content;
     if (!text) {
         throw new Error('Groq returned no scoreable text content.');
     }
 
+    // Clean up response - remove markdown fences if present
+    let cleanedText = text.trim();
+    if (cleanedText.startsWith('```json')) {
+        cleanedText = cleanedText.slice(7);
+    } else if (cleanedText.startsWith('```')) {
+        cleanedText = cleanedText.slice(3);
+    }
+    if (cleanedText.endsWith('```')) {
+        cleanedText = cleanedText.slice(0, -3);
+    }
+    cleanedText = cleanedText.trim();
+
     let scores;
     try {
-        scores = JSON.parse(text);
+        scores = JSON.parse(cleanedText);
     } catch (err) {
         throw new Error(`Could not parse Groq's JSON output: ${err.message}\nRaw response: ${text}`);
+    }
+
+    if (!Array.isArray(scores)) {
+        throw new Error(`Groq returned non-array response: ${JSON.stringify(scores)}`);
     }
 
     const scoreByJobId = new Map(scores.map((s) => [s.job_id, s]));
@@ -230,8 +283,8 @@ export async function scorePostingsBatchGroq(postings) {
 /**
  * Scores a batch of postings with Gemini using the uploaded CV file context
  * and merges fit_score/fit_reasoning back onto each posting.
- * If Gemini returns a 5xx error, falls back to Groq if available.
- * Matches postings to scores by job_id, so the order Gemini returns them in doesn't matter.
+ * If Gemini fails (any error), falls back to Groq if available.
+ * Matches postings to scores by job_id, so the order doesn't matter.
  *
  * IMPORTANT: Call initialize() first to upload the CV file.
  *
@@ -241,17 +294,20 @@ export async function scorePostingsBatchGroq(postings) {
 export async function scorePostingsBatch(postings) {
     if (postings.length === 0) return [];
 
-    if (!uploadedFile) {
-        throw new Error('CV file not uploaded. Call initialize() first.');
-    }
-
-    if (!genAI) {
-        throw new Error('Gemini client not initialized. Call initialize() first.');
+    // If Gemini is not available, use Groq directly
+    if (!uploadedFile || !genAI) {
+        if (groqClient) {
+            console.log('Gemini not available, using Groq as primary scorer...');
+            return scorePostingsBatchGroq(postings);
+        }
+        throw new Error('No scoring service available. Neither Gemini nor Groq is initialized.');
     }
 
     const prompt = buildPrompt(postings);
 
     try {
+        console.log(`📊 Scoring ${postings.length} postings with Gemini (${GEMINI_MODEL})...`);
+
         const response = await genAI.models.generateContent({
             model: GEMINI_MODEL,
             contents: [{
@@ -293,9 +349,10 @@ export async function scorePostingsBatch(postings) {
             };
         });
     } catch (err) {
-        // Check if error is a 5xx server error and Groq fallback is available
-        if (err.status >= 500 && err.status < 600 && groqClient) {
-            console.warn(`⚠️  Gemini returned ${err.status} error: ${err.message}`);
+        // Fall back to Groq for ANY error (503, timeout, rate limit, etc.)
+        if (groqClient) {
+            console.warn(`⚠️  Gemini error (${err.status || 'unknown'}): ${err.message}`);
+            console.log('Falling back to Groq...');
             return scorePostingsBatchGroq(postings);
         }
         throw err;
