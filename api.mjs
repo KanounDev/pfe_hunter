@@ -23,7 +23,9 @@
 //   npm install express cors pg dotenv multer @supabase/supabase-js
 //   node api.mjs
 
-import 'dotenv/config';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+require('dotenv').config();
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
