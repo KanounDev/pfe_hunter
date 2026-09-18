@@ -30,13 +30,14 @@ import { downloadCvFromStorage } from './supabase-storage.mjs';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-const GROQ_MODEL = process.env.GROQ_MODEL || 'qwen/qwen3.8-27b';
+// Use llama-3.3-70b-versatile - higher token limits and more reliable
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 
 // Module-level state for the uploaded CV file
 let uploadedFile = null;
 let genAI = null;
 let groqClient = null;
-let cvTextContent = null; // CV text for Groq (extracted/readable format)
+let cvTextContent = null; // CV text extracted from PDF
 
 /**
  * Resolves the local path of the CV to upload to Gemini.
@@ -81,23 +82,29 @@ async function resolveCvPath(cvPathOverride) {
 }
 
 /**
- * Extracts text content from CV file for Groq fallback.
- * For PDF files, reads as buffer and encodes to base64 for multimodal models.
- * For text files, reads directly.
+ * Extracts text content from a PDF file using pdf-parse.
+ * Falls back to raw text reading for non-PDF files.
  *
  * @param {string} cvPath - Path to CV file
- * @returns {Promise<string>} CV content (text or base64-encoded)
+ * @returns {Promise<string>} Extracted text content
  */
-async function extractCvContent(cvPath) {
+async function extractCvText(cvPath) {
     const buffer = await readFile(cvPath);
 
-    // Check if it's a PDF by extension
+    // Check if it's a PDF
     if (cvPath.toLowerCase().endsWith('.pdf')) {
-        // For multimodal models, encode as base64
-        return buffer.toString('base64');
+        try {
+            // Dynamic import for pdf-parse (CommonJS module)
+            const pdfParse = require('pdf-parse');
+            const data = await pdfParse(buffer);
+            return data.text;
+        } catch (err) {
+            console.warn('Failed to parse PDF, treating as text:', err.message);
+            // Fall through to text extraction
+        }
     }
 
-    // For text files, return as string
+    // For text files or if PDF parsing fails
     return buffer.toString('utf-8');
 }
 
@@ -128,11 +135,10 @@ export async function initialize(cvPathOverride) {
         throw new Error(`CV file not found at: ${cvPath}`);
     }
 
-    // Extract CV content for Groq fallback BEFORE any Gemini operations
-    // This ensures Groq can work even if Gemini initialization fails
+    // Extract CV text for Groq fallback BEFORE any Gemini operations
     try {
-        cvTextContent = await extractCvContent(cvPath);
-        console.log(`CV content extracted for fallback (${(cvTextContent.length / 1024).toFixed(1)} KB).`);
+        cvTextContent = await extractCvText(cvPath);
+        console.log(`CV text extracted (${(cvTextContent.length / 1024).toFixed(1)} KB text, ~${Math.ceil(cvTextContent.length / 4)} tokens).`);
     } catch (err) {
         console.warn('Could not extract CV text for fallback:', err.message);
     }
@@ -149,7 +155,7 @@ export async function initialize(cvPathOverride) {
             console.log(`CV uploaded successfully to Gemini. File URI: ${uploadedFile.uri}`);
         } catch (err) {
             console.warn(`Failed to upload CV to Gemini: ${err.message}`);
-            if (!groqClient) {
+            if (!groqClient || !cvTextContent) {
                 throw new Error('Neither Gemini nor Groq is available for scoring.');
             }
             console.log('Will use Groq as primary scorer since Gemini upload failed.');
@@ -183,15 +189,17 @@ export async function cleanup() {
     }
 }
 
-function buildPrompt(postings) {
+function buildPrompt(postings, includeCv = false) {
     const jobsBlock = postings
         .map(
             (p) =>
-            `- job_id: ${p.job_id}\n  title: ${p.title}\n  company: ${p.company}\n  location: ${p.location}\n  description: ${(p.description || '').slice(0, 800)}`
+            `- job_id: ${p.job_id}\n  title: ${p.title}\n  company: ${p.company}\n  location: ${p.location}\n  description: ${(p.description || '').slice(0, 600)}`
         )
         .join('\n\n');
 
-    return `You are screening job postings for fit against the candidate's CV document provided above.
+    const cvSection = includeCv ? `\n\nCANDIDATE CV:\n${cvTextContent.slice(0, 8000)}\n` : '';
+
+    return `${cvSection}You are screening job postings for fit against the candidate's CV document provided above.
 
 For EACH posting below, give:
 - fit_score: an integer 0-100 (100 = perfect match)
@@ -205,7 +213,7 @@ Respond with ONLY a JSON array, no markdown fences, no extra text, in exactly th
 }
 
 /**
- * Scores a batch of postings with Groq using the CV content.
+ * Scores a batch of postings with Groq using the CV text.
  * Uses OpenAI-compatible chat.completions API.
  *
  * @param {Array} postings - deduped postings (job_id, title, company, ...)
@@ -220,64 +228,81 @@ export async function scorePostingsBatchGroq(postings) {
         throw new Error('CV content not available for Groq scoring.');
     }
 
-    const prompt = buildPrompt(postings);
+    // Process in smaller batches to avoid token limits
+    // Rough estimate: ~4 chars per token, limit ~6000 tokens for input
+    const MAX_BATCH_TOKENS = 5000;
+    const results = [];
 
-    console.log(`🔄 Scoring with Groq (${GROQ_MODEL})...`);
+    for (let i = 0; i < postings.length; i += 5) {
+        const batch = postings.slice(i, i + 5);
+        const prompt = buildPrompt(batch, true);
 
-    const response = await groqClient.chat.completions.create({
-        model: GROQ_MODEL,
-        messages: [
-            {
-                role: 'system',
-                content: 'You are a job matching assistant. Analyze job postings against candidate CVs and provide fit scores. Always respond with valid JSON only, no markdown fences.',
-            },
-            {
-                role: 'user',
-                content: `Here is the candidate's CV (base64 encoded PDF):\n\n${cvTextContent}\n\n---\n\n${prompt}`,
-            },
-        ],
-        temperature: 0.3,
-        max_tokens: 2048,
-    });
+        console.log(`🔄 Scoring batch ${Math.floor(i/5) + 1} with Groq (${GROQ_MODEL})...`);
 
-    const text = response?.choices?.[0]?.message?.content;
-    if (!text) {
-        throw new Error('Groq returned no scoreable text content.');
+        const response = await groqClient.chat.completions.create({
+            model: GROQ_MODEL,
+            messages: [
+                {
+                    role: 'system',
+                    content: 'You are a job matching assistant. Analyze job postings against candidate CVs and provide fit scores. Always respond with valid JSON only, no markdown fences.',
+                },
+                {
+                    role: 'user',
+                    content: prompt,
+                },
+            ],
+            temperature: 0.3,
+            max_tokens: 1024,
+        });
+
+        const text = response?.choices?.[0]?.message?.content;
+        if (!text) {
+            throw new Error('Groq returned no scoreable text content.');
+        }
+
+        // Clean up response - remove markdown fences if present
+        let cleanedText = text.trim();
+        if (cleanedText.startsWith('```json')) {
+            cleanedText = cleanedText.slice(7);
+        } else if (cleanedText.startsWith('```')) {
+            cleanedText = cleanedText.slice(3);
+        }
+        if (cleanedText.endsWith('```')) {
+            cleanedText = cleanedText.slice(0, -3);
+        }
+        cleanedText = cleanedText.trim();
+
+        let scores;
+        try {
+            scores = JSON.parse(cleanedText);
+        } catch (err) {
+            throw new Error(`Could not parse Groq's JSON output: ${err.message}\nRaw response: ${text}`);
+        }
+
+        if (!Array.isArray(scores)) {
+            throw new Error(`Groq returned non-array response: ${JSON.stringify(scores)}`);
+        }
+
+        const scoreByJobId = new Map(scores.map((s) => [s.job_id, s]));
+
+        const batchResults = batch.map((p) => {
+            const s = scoreByJobId.get(p.job_id);
+            return {
+                ...p,
+                fit_score: s?.fit_score ?? null,
+                fit_reasoning: s?.fit_reasoning ?? null,
+            };
+        });
+
+        results.push(...batchResults);
+
+        // Small delay between batches to respect rate limits
+        if (i + 5 < postings.length) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+        }
     }
 
-    // Clean up response - remove markdown fences if present
-    let cleanedText = text.trim();
-    if (cleanedText.startsWith('```json')) {
-        cleanedText = cleanedText.slice(7);
-    } else if (cleanedText.startsWith('```')) {
-        cleanedText = cleanedText.slice(3);
-    }
-    if (cleanedText.endsWith('```')) {
-        cleanedText = cleanedText.slice(0, -3);
-    }
-    cleanedText = cleanedText.trim();
-
-    let scores;
-    try {
-        scores = JSON.parse(cleanedText);
-    } catch (err) {
-        throw new Error(`Could not parse Groq's JSON output: ${err.message}\nRaw response: ${text}`);
-    }
-
-    if (!Array.isArray(scores)) {
-        throw new Error(`Groq returned non-array response: ${JSON.stringify(scores)}`);
-    }
-
-    const scoreByJobId = new Map(scores.map((s) => [s.job_id, s]));
-
-    return postings.map((p) => {
-        const s = scoreByJobId.get(p.job_id);
-        return {
-            ...p,
-            fit_score: s?.fit_score ?? null,
-            fit_reasoning: s?.fit_reasoning ?? null,
-        };
-    });
+    return results;
 }
 
 /**
@@ -296,14 +321,14 @@ export async function scorePostingsBatch(postings) {
 
     // If Gemini is not available, use Groq directly
     if (!uploadedFile || !genAI) {
-        if (groqClient) {
+        if (groqClient && cvTextContent) {
             console.log('Gemini not available, using Groq as primary scorer...');
             return scorePostingsBatchGroq(postings);
         }
         throw new Error('No scoring service available. Neither Gemini nor Groq is initialized.');
     }
 
-    const prompt = buildPrompt(postings);
+    const prompt = buildPrompt(postings, false);
 
     try {
         console.log(`📊 Scoring ${postings.length} postings with Gemini (${GEMINI_MODEL})...`);
@@ -350,7 +375,7 @@ export async function scorePostingsBatch(postings) {
         });
     } catch (err) {
         // Fall back to Groq for ANY error (503, timeout, rate limit, etc.)
-        if (groqClient) {
+        if (groqClient && cvTextContent) {
             console.warn(`⚠️  Gemini error (${err.status || 'unknown'}): ${err.message}`);
             console.log('Falling back to Groq...');
             return scorePostingsBatchGroq(postings);
