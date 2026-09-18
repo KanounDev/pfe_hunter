@@ -11,7 +11,9 @@
 //   TELEGRAM_CHAT_ID     - the chat/user id the bot should message
 //   DISCORD_WEBHOOK_URL  - a channel webhook URL from Discord "Integrations"
 
-import 'dotenv/config';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+require('dotenv').config();
 import { getSetting } from './db.mjs';
 
 async function getDiscordWebhookUrl() {
