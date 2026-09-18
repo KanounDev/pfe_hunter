@@ -25,7 +25,9 @@
 //
 // Intended to run on the 6-hourly schedule (cron / GitHub Action).
 
-import 'dotenv/config';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+require('dotenv').config();
 import { existsSync } from 'node:fs';
 import { ensureSchema, getUnscoredPostings, saveScores, closePool, getSetting, getActiveCvPath, pool } from './db.mjs';
 import { scorePostingsBatch, initialize as initScoring, cleanup as cleanupScoring } from './gemini-scoring.mjs';
