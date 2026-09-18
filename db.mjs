@@ -8,7 +8,9 @@
 //   Add to .env:
 //     DATABASE_URL=postgres://user:password@localhost:5432/pfe_hunter
 
-import 'dotenv/config';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+require('dotenv').config();
 import pg from 'pg';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
