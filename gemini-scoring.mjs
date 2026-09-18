@@ -1,4 +1,4 @@
-+// gemini-scoring.mjs
+// gemini-scoring.mjs
 //
 // The "LLM Agent — Gemini API" box in the architecture diagram. Takes
 // newly-deduped postings (the output of db.mjs's dedupeAndInsert) and
@@ -16,7 +16,9 @@
 // Uses @google/genai SDK with Files API for CV upload (Gemini).
 // Falls back to groq-sdk for scoring if Gemini returns 5xx errors.
 
-import 'dotenv/config';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+require('dotenv').config();
 import { GoogleGenAI } from '@google/genai';
 import Groq from 'groq-sdk';
 import { writeFile, unlink } from 'node:fs/promises';
