@@ -30,7 +30,7 @@ import { downloadCvFromStorage } from './supabase-storage.mjs';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
-const GROQ_MODEL = process.env.GROQ_MODEL || 'qwen/qwen3-32b';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'qwen/qwen3.8-27b';
 
 // Module-level state for the uploaded CV file
 let uploadedFile = null;
