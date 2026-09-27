@@ -24,14 +24,23 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import Groq from 'groq-sdk';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.1-8b-instant';
 const DEFAULT_FIT_SCORE_THRESHOLD = 70;
 const MAX_RETRIES = 3;
 const RETRY_BACKOFF_MS = 1000; // 1s, then 2s, then 4s
+
+// Initialize Groq client for fallback
+let groqClient = null;
+if (GROQ_API_KEY) {
+    groqClient = new Groq({ apiKey: GROQ_API_KEY });
+}
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -112,8 +121,78 @@ export function mcpToolToGeminiDeclaration(mcpTool) {
     };
 }
 
-// Wrapped with retry/backoff — previously a single transient failure here
-// (timeout, a flaky 5xx, etc.) killed the whole run even though the
+/**
+ * Converts MCP tool schema to OpenAI-compatible function format for Groq.
+ * Groq uses the same function-calling format as OpenAI.
+ */
+export function mcpToolToGroqTool(mcpTool) {
+    return {
+        type: 'function',
+        function: {
+            name: mcpTool.name,
+            description: mcpTool.description,
+            parameters: sanitizeSchemaForGemini(mcpTool.inputSchema), // Same sanitization works
+        },
+    };
+}
+
+/**
+ * Fallback to Groq when Gemini fails (503, rate limits, etc.).
+ * Groq uses OpenAI-compatible function calling.
+ */
+async function callGroq(contents, groqTools) {
+    if (!groqClient) {
+        throw new Error('Groq API key not configured (GROQ_API_KEY missing from .env)');
+    }
+
+    // Convert Gemini contents format to OpenAI messages format
+    const messages = contents.map(c => ({
+        role: c.role === 'user' ? 'user' : 'assistant',
+        content: c.parts.map(p => p.text).join('\n'),
+    }));
+
+    const response = await groqClient.chat.completions.create({
+        model: GROQ_MODEL,
+        messages,
+        tools: groqTools,
+        tool_choice: 'auto',
+    });
+
+    // Convert Groq response to Gemini-like format for consistent handling downstream
+    const choice = response.choices[0];
+    if (!choice) {
+        throw new Error('Groq returned no choices');
+    }
+
+    // Convert OpenAI function calls to Gemini-like format
+    if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
+        const toolCall = choice.message.tool_calls[0];
+        return {
+            candidates: [{
+                content: {
+                    parts: [{
+                        functionCall: {
+                            name: toolCall.function.name,
+                            args: JSON.parse(toolCall.function.arguments),
+                        },
+                    }],
+                },
+            }],
+        };
+    }
+
+    // No tool call - return empty parts (Gemini-style)
+    return {
+        candidates: [{
+            content: {
+                parts: [{ text: choice.message.content || '' }],
+            },
+        }],
+    };
+}
+
+// Wrapped with retry/backoff with Groq fallback — previously a single transient
+// failure here (timeout, a flaky 5xx, etc.) killed the whole run even though the
 // scraping, dedup, and scoring stages that got us this far all succeeded.
 async function callGemini(contents, geminiTools) {
     let lastError;
@@ -136,11 +215,39 @@ async function callGemini(contents, geminiTools) {
             return await res.json();
         } catch (err) {
             lastError = err;
-            if (attempt < MAX_RETRIES) {
+            // Check if error is retryable (5xx errors, network issues)
+            const isRetryable = err.message.includes('503') ||
+                                err.message.includes('502') ||
+                                err.message.includes('500') ||
+                                err.message.includes('ECONNREFUSED') ||
+                                err.message.includes('ETIMEDOUT');
+
+            if (attempt < MAX_RETRIES && isRetryable) {
                 const wait = RETRY_BACKOFF_MS * 2 ** (attempt - 1);
                 console.warn(`Gemini call failed (attempt ${attempt}/${MAX_RETRIES}): ${err.message}. Retrying in ${wait}ms...`);
                 await sleep(wait);
+            } else if (!isRetryable) {
+                // Non-retryable error (like 400 Bad Request) - fail fast
+                break;
             }
+        }
+    }
+
+    // All Gemini retries exhausted - try Groq fallback
+    if (groqClient) {
+        console.warn('Gemini failed after all retries. Falling back to Groq...');
+        try {
+            const groqTools = geminiTools.map(tool => {
+                // Convert Gemini function declaration to Groq/OpenAI format
+                return {
+                    type: 'function',
+                    function: tool,
+                };
+            });
+            return await callGroq(contents, groqTools);
+        } catch (groqError) {
+            console.error(`Groq fallback also failed: ${groqError.message}`);
+            throw new Error(`Both Gemini and Groq failed. Gemini: ${lastError.message}. Groq: ${groqError.message}`);
         }
     }
 
